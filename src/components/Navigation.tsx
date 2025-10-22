@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { path: "/", label: "Inventory", icon: Package },
-  { path: "/add-product", label: "Add Product", icon: PackagePlus },
+  { path: "/products", label: "Products", icon: PackagePlus },
   { path: "/scan", label: "Scan Log", icon: QrCode },
   { path: "/sales-orders", label: "Sales Orders", icon: ShoppingCart },
   { path: "/purchase-orders", label: "Purchase Orders", icon: ClipboardList },
