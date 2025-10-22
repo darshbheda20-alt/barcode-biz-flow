@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Search, Edit, Trash2, Package, Plus } from "lucide-react";
+import { Search, Edit, Trash2, Package, Plus, Upload } from "lucide-react";
 import { toast } from "sonner";
+import * as XLSX from 'xlsx';
 
 interface Product {
   id: string;
@@ -184,6 +185,49 @@ export default function Products() {
     }
   };
 
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+      if (jsonData.length === 0) {
+        toast.error("Excel file is empty");
+        return;
+      }
+
+      const productsToInsert = jsonData.map((row: any) => ({
+        name: row.name || row.Name,
+        brand: row.brand || row.Brand,
+        master_sku: row.master_sku || row['Master SKU'],
+        color: row.color || row.Color || null,
+        brand_size: row.brand_size || row['Brand Size'] || null,
+        standard_size: row.standard_size || row['Standard Size'] || null,
+        barcode: row.barcode || row.Barcode,
+        mrp: parseFloat(row.mrp || row.MRP),
+        cost_price: parseFloat(row.cost_price || row['Cost Price']),
+        reorder_level: parseInt(row.reorder_level || row['Reorder Level'] || '10'),
+        vendor_name: row.vendor_name || row['Vendor Name'],
+      }));
+
+      const { error } = await supabase.from("products").insert(productsToInsert);
+
+      if (error) throw error;
+
+      toast.success(`Successfully imported ${productsToInsert.length} products!`);
+      e.target.value = '';
+    } catch (error: any) {
+      console.error("Import error:", error);
+      toast.error(error.message || "Failed to import products");
+      e.target.value = '';
+    }
+  };
+
   const filteredProducts = products.filter(
     (p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -216,6 +260,17 @@ export default function Products() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
+              <Button variant="outline" onClick={() => document.getElementById('excel-upload')?.click()}>
+                <Upload className="mr-2 h-4 w-4" />
+                Import Excel
+              </Button>
+              <input
+                id="excel-upload"
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                onChange={handleFileImport}
+              />
               <Button onClick={handleAddNew}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Product
