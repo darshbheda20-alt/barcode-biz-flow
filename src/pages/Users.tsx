@@ -10,6 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UserPlus, Trash2, Shield } from "lucide-react";
+import { z } from "zod";
+
+const userSchema = z.object({
+  email: z.string().email("Invalid email address").max(255, "Email too long"),
+  password: z.string().min(6, "Password must be at least 6 characters").max(72, "Password too long"),
+  fullName: z.string().min(1, "Full name is required").max(100, "Name too long"),
+});
 
 interface Profile {
   id: string;
@@ -102,26 +109,48 @@ export default function Users() {
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Validate input
+    const validation = userSchema.safeParse(newUser);
+    if (!validation.success) {
+      toast({
+        variant: "destructive",
+        title: "Validation Error",
+        description: validation.error.issues[0].message,
+      });
+      return;
+    }
+
     const { data, error } = await supabase.auth.signUp({
-      email: newUser.email,
+      email: newUser.email.trim(),
       password: newUser.password,
       options: {
         data: {
-          full_name: newUser.fullName,
+          full_name: newUser.fullName.trim(),
         },
+        emailRedirectTo: `${window.location.origin}/`,
       },
     });
 
     if (error) {
       toast({
         variant: "destructive",
-        title: "Error",
+        title: "Error Creating User",
         description: error.message,
       });
       return;
     }
 
-    if (data.user && newUser.role === "admin") {
+    if (!data.user) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "User creation failed - no user returned",
+      });
+      return;
+    }
+
+    // Assign admin role if needed
+    if (newUser.role === "admin") {
       const { error: roleError } = await supabase
         .from("user_roles")
         .insert({ user_id: data.user.id, role: "admin" });
@@ -129,15 +158,15 @@ export default function Users() {
       if (roleError) {
         toast({
           variant: "destructive",
-          title: "Error",
-          description: "Failed to assign admin role",
+          title: "Warning",
+          description: "User created but failed to assign admin role",
         });
       }
     }
 
     toast({
       title: "Success",
-      description: "User created successfully",
+      description: `User ${newUser.email} created successfully`,
     });
 
     setAddUserOpen(false);
@@ -282,11 +311,15 @@ export default function Users() {
                     <Input
                       id="password"
                       type="password"
+                      placeholder="Min. 6 characters"
                       value={newUser.password}
                       onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
                       required
                       minLength={6}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Must be at least 6 characters
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="role">Role</Label>
