@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Search, Edit, Trash2, Package, Plus, Upload } from "lucide-react";
+import { Search, Edit, Trash2, Package, Plus, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from 'xlsx';
 
@@ -185,6 +185,30 @@ export default function Products() {
     }
   };
 
+  const handleDownloadTemplate = () => {
+    const template = [
+      {
+        'Name': 'Sample Product',
+        'Brand': 'Sample Brand',
+        'Master SKU': 'SKU001',
+        'Color': 'Red',
+        'Brand Size': 'M',
+        'Standard Size': 'Medium',
+        'Barcode': '1234567890',
+        'MRP': 999.99,
+        'Cost Price': 599.99,
+        'Reorder Level': 10,
+        'Vendor Name': 'Sample Vendor'
+      }
+    ];
+
+    const worksheet = XLSX.utils.json_to_sheet(template);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Products Template');
+    XLSX.writeFile(workbook, 'products_import_template.xlsx');
+    toast.success('Template downloaded successfully!');
+  };
+
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -260,6 +284,10 @@ export default function Products() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
+              <Button variant="outline" onClick={handleDownloadTemplate}>
+                <Download className="mr-2 h-4 w-4" />
+                Download Template
+              </Button>
               <Button variant="outline" onClick={() => document.getElementById('excel-upload')?.click()}>
                 <Upload className="mr-2 h-4 w-4" />
                 Import Excel
