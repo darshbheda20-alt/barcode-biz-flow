@@ -14,6 +14,7 @@ interface Product {
   available_units: number;
   damaged_units: number;
   reorder_level: number;
+  cost_price: number;
 }
 
 export default function Inventory() {
@@ -71,6 +72,8 @@ export default function Inventory() {
   const lowStock = products.filter((p) => p.available_units < p.reorder_level).length;
   const totalAvailable = products.reduce((sum, p) => sum + p.available_units, 0);
   const totalDamaged = products.reduce((sum, p) => sum + p.damaged_units, 0);
+  const inventoryValue = products.reduce((sum, p) => sum + (p.available_units * Number(p.cost_price)), 0);
+  const totalCostValue = products.reduce((sum, p) => sum + ((p.available_units + p.damaged_units) * Number(p.cost_price)), 0);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -79,7 +82,7 @@ export default function Inventory() {
         <p className="text-muted-foreground">Real-time stock levels and product overview</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium">Total Products</CardTitle>
@@ -113,6 +116,24 @@ export default function Inventory() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-warning">{lowStock}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Available Inventory Value</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-primary">₹{inventoryValue.toFixed(2)}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Total Investment (CP)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">₹{totalCostValue.toFixed(2)}</div>
           </CardContent>
         </Card>
       </div>
