@@ -225,19 +225,40 @@ export default function Products() {
         return;
       }
 
-      const productsToInsert = jsonData.map((row: any) => ({
-        name: row.name || row.Name,
-        brand: row.brand || row.Brand,
-        master_sku: row.master_sku || row['Master SKU'],
-        color: row.color || row.Color || null,
-        brand_size: row.brand_size || row['Brand Size'] || null,
-        standard_size: row.standard_size || row['Standard Size'] || null,
-        barcode: row.barcode || row.Barcode,
-        mrp: parseFloat(row.mrp || row.MRP),
-        cost_price: parseFloat(row.cost_price || row['Cost Price']),
-        reorder_level: parseInt(row.reorder_level || row['Reorder Level'] || '10'),
-        vendor_name: row.vendor_name || row['Vendor Name'],
-      }));
+      const productsToInsert = jsonData
+        .map((row: any, index: number) => {
+          const product = {
+            name: row.name || row.Name,
+            brand: row.brand || row.Brand,
+            master_sku: row.master_sku || row['Master SKU'],
+            color: row.color || row.Color || null,
+            brand_size: row.brand_size || row['Brand Size'] || null,
+            standard_size: row.standard_size || row['Standard Size'] || null,
+            barcode: row.barcode || row.Barcode,
+            mrp: parseFloat(row.mrp || row.MRP),
+            cost_price: parseFloat(row.cost_price || row['Cost Price']),
+            reorder_level: parseInt(row.reorder_level || row['Reorder Level'] || '10'),
+            vendor_name: row.vendor_name || row['Vendor Name'],
+          };
+
+          // Validate required fields
+          const requiredFields = ['name', 'brand', 'master_sku', 'barcode', 'vendor_name'];
+          const missingFields = requiredFields.filter(field => !product[field as keyof typeof product]);
+          
+          if (missingFields.length > 0) {
+            throw new Error(`Row ${index + 2}: Missing required fields: ${missingFields.join(', ')}`);
+          }
+
+          if (isNaN(product.mrp)) {
+            throw new Error(`Row ${index + 2}: Invalid MRP value`);
+          }
+
+          if (isNaN(product.cost_price)) {
+            throw new Error(`Row ${index + 2}: Invalid Cost Price value`);
+          }
+
+          return product;
+        });
 
       const { error } = await supabase.from("products").insert(productsToInsert);
 
