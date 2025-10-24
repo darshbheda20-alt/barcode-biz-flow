@@ -17,7 +17,7 @@ export type Database = {
       products: {
         Row: {
           available_units: number
-          barcode: string
+          barcode: string | null
           brand: string
           brand_size: string | null
           color: string | null
@@ -35,7 +35,7 @@ export type Database = {
         }
         Insert: {
           available_units?: number
-          barcode: string
+          barcode?: string | null
           brand: string
           brand_size?: string | null
           color?: string | null
@@ -53,7 +53,7 @@ export type Database = {
         }
         Update: {
           available_units?: number
-          barcode?: string
+          barcode?: string | null
           brand?: string
           brand_size?: string | null
           color?: string | null

@@ -17,7 +17,7 @@ interface Product {
   color: string | null;
   brand_size: string | null;
   standard_size: string | null;
-  barcode: string;
+  barcode: string | null;
   mrp: number;
   cost_price: number;
   reorder_level: number;
@@ -121,7 +121,7 @@ export default function Products() {
         color: newProduct.color || null,
         brand_size: newProduct.brand_size || null,
         standard_size: newProduct.standard_size || null,
-        barcode: newProduct.barcode,
+        barcode: newProduct.barcode || null,
         mrp: parseFloat(newProduct.mrp),
         cost_price: parseFloat(newProduct.cost_price),
         reorder_level: parseInt(newProduct.reorder_level),
@@ -234,15 +234,15 @@ export default function Products() {
             color: row.color || row.Color || null,
             brand_size: row.brand_size || row['Brand Size'] || null,
             standard_size: row.standard_size || row['Standard Size'] || null,
-            barcode: row.barcode || row.Barcode,
+            barcode: row.barcode || row.Barcode || null,
             mrp: parseFloat(row.mrp || row.MRP),
             cost_price: parseFloat(row.cost_price || row['Cost Price']),
             reorder_level: parseInt(row.reorder_level || row['Reorder Level'] || '10'),
             vendor_name: row.vendor_name || row['Vendor Name'],
           };
 
-          // Validate required fields
-          const requiredFields = ['name', 'brand', 'master_sku', 'barcode', 'vendor_name'];
+          // Validate required fields (barcode is now optional)
+          const requiredFields = ['name', 'brand', 'master_sku', 'vendor_name'];
           const missingFields = requiredFields.filter(field => !product[field as keyof typeof product]);
           
           if (missingFields.length > 0) {
@@ -276,7 +276,7 @@ export default function Products() {
   const filteredProducts = products.filter(
     (p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.barcode.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode?.toLowerCase() || '').includes(search.toLowerCase()) ||
       p.master_sku.toLowerCase().includes(search.toLowerCase()) ||
       p.brand.toLowerCase().includes(search.toLowerCase())
   );
@@ -347,7 +347,7 @@ export default function Products() {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-muted-foreground">
                       <span>Brand: {product.brand}</span>
                       <span>SKU: {product.master_sku}</span>
-                      <span>Barcode: {product.barcode}</span>
+                      <span>Barcode: {product.barcode || 'N/A'}</span>
                       <span>Vendor: {product.vendor_name}</span>
                       <span>MRP: ₹{product.mrp}</span>
                       <span>Cost: ₹{product.cost_price}</span>
@@ -420,10 +420,9 @@ export default function Products() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="new-barcode">Barcode *</Label>
+                  <Label htmlFor="new-barcode">Barcode</Label>
                   <Input
                     id="new-barcode"
-                    required
                     value={newProduct.barcode}
                     onChange={(e) => setNewProduct({ ...newProduct, barcode: e.target.value })}
                   />
@@ -555,10 +554,9 @@ export default function Products() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="edit-barcode">Barcode *</Label>
+                  <Label htmlFor="edit-barcode">Barcode</Label>
                   <Input
                     id="edit-barcode"
-                    required
                     value={editingProduct.barcode}
                     onChange={(e) =>
                       setEditingProduct({ ...editingProduct, barcode: e.target.value })
