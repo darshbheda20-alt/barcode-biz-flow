@@ -8,6 +8,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { QrCode, PackagePlus, Package, AlertTriangle } from "lucide-react";
+import { z } from "zod";
+
+const scanSchema = z.object({
+  barcode: z.string().trim().min(1, "Barcode is required").max(100, "Barcode must be less than 100 characters"),
+  quantity: z.number().int("Quantity must be a whole number").positive("Quantity must be positive").max(10000, "Quantity cannot exceed 10,000"),
+  orderId: z.string().max(100, "Order ID must be less than 100 characters").optional(),
+  packetId: z.string().max(100, "Packet ID must be less than 100 characters").optional(),
+  tagId: z.string().max(100, "Tag ID must be less than 100 characters").optional(),
+  platform: z.string().min(1, "Platform is required").max(50, "Platform must be less than 50 characters").optional(),
+});
 
 const platforms = ["Amazon", "Flipkart", "Myntra", "Meesho", "Other"];
 
@@ -39,10 +49,21 @@ export default function ScanLog() {
     setLoading(true);
 
     try {
+      const validation = scanSchema.safeParse({
+        barcode: receiveData.barcode,
+        quantity: parseInt(receiveData.quantity),
+      });
+
+      if (!validation.success) {
+        toast.error(validation.error.issues[0].message);
+        setLoading(false);
+        return;
+      }
+
       const { data: product, error: productError } = await supabase
         .from("products")
         .select("id")
-        .eq("barcode", receiveData.barcode)
+        .eq("barcode", validation.data.barcode)
         .single();
 
       if (productError || !product) {
@@ -53,7 +74,7 @@ export default function ScanLog() {
       const { error } = await supabase.from("scan_logs").insert({
         product_id: product.id,
         scan_mode: "receive",
-        quantity: parseInt(receiveData.quantity),
+        quantity: validation.data.quantity,
       });
 
       if (error) throw error;
@@ -72,10 +93,25 @@ export default function ScanLog() {
     setLoading(true);
 
     try {
+      const validation = scanSchema.safeParse({
+        barcode: pickData.barcode,
+        quantity: parseInt(pickData.quantity),
+        orderId: pickData.orderId,
+        packetId: pickData.packetId,
+        tagId: pickData.tagId,
+        platform: pickData.platform,
+      });
+
+      if (!validation.success) {
+        toast.error(validation.error.issues[0].message);
+        setLoading(false);
+        return;
+      }
+
       const { data: product, error: productError } = await supabase
         .from("products")
         .select("*")
-        .eq("barcode", pickData.barcode)
+        .eq("barcode", validation.data.barcode)
         .single();
 
       if (productError || !product) {
@@ -83,7 +119,7 @@ export default function ScanLog() {
         return;
       }
 
-      if (product.available_units < parseInt(pickData.quantity)) {
+      if (product.available_units < validation.data.quantity) {
         toast.error("Insufficient stock available");
         return;
       }
@@ -91,22 +127,22 @@ export default function ScanLog() {
       const { error: scanError } = await supabase.from("scan_logs").insert({
         product_id: product.id,
         scan_mode: "pick",
-        quantity: parseInt(pickData.quantity),
-        order_id: pickData.orderId,
-        packet_id: pickData.packetId,
-        tag_id: pickData.tagId,
-        platform: pickData.platform,
+        quantity: validation.data.quantity,
+        order_id: validation.data.orderId || null,
+        packet_id: validation.data.packetId || null,
+        tag_id: validation.data.tagId || null,
+        platform: validation.data.platform || null,
       });
 
       if (scanError) throw scanError;
 
       const { error: orderError } = await supabase.from("sales_orders").insert({
-        order_id: pickData.orderId,
-        packet_id: pickData.packetId,
-        tag_id: pickData.tagId,
-        platform: pickData.platform,
+        order_id: validation.data.orderId!,
+        packet_id: validation.data.packetId || null,
+        tag_id: validation.data.tagId || null,
+        platform: validation.data.platform!,
         product_id: product.id,
-        quantity: parseInt(pickData.quantity),
+        quantity: validation.data.quantity,
       });
 
       if (orderError) throw orderError;
@@ -132,10 +168,21 @@ export default function ScanLog() {
     setLoading(true);
 
     try {
+      const validation = scanSchema.safeParse({
+        barcode: damageData.barcode,
+        quantity: parseInt(damageData.quantity),
+      });
+
+      if (!validation.success) {
+        toast.error(validation.error.issues[0].message);
+        setLoading(false);
+        return;
+      }
+
       const { data: product, error: productError } = await supabase
         .from("products")
         .select("id")
-        .eq("barcode", damageData.barcode)
+        .eq("barcode", validation.data.barcode)
         .single();
 
       if (productError || !product) {
@@ -146,7 +193,7 @@ export default function ScanLog() {
       const { error } = await supabase.from("scan_logs").insert({
         product_id: product.id,
         scan_mode: "damage",
-        quantity: parseInt(damageData.quantity),
+        quantity: validation.data.quantity,
       });
 
       if (error) throw error;

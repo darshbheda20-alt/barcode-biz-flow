@@ -10,6 +10,21 @@ import { toast } from "sonner";
 import * as XLSX from 'xlsx';
 import BarcodeScanner from "@/components/BarcodeScanner";
 import ProductGroupedView from "@/components/ProductGroupedView";
+import { z } from "zod";
+
+const productSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(200, "Name must be less than 200 characters"),
+  brand: z.string().trim().min(1, "Brand is required").max(100, "Brand must be less than 100 characters"),
+  master_sku: z.string().trim().min(1, "Master SKU is required").max(100, "Master SKU must be less than 100 characters"),
+  color: z.string().max(50, "Color must be less than 50 characters").nullable(),
+  brand_size: z.string().max(50, "Brand size must be less than 50 characters").nullable(),
+  standard_size: z.string().max(50, "Standard size must be less than 50 characters").nullable(),
+  barcode: z.string().max(100, "Barcode must be less than 100 characters").nullable(),
+  mrp: z.number().positive("MRP must be positive").finite("MRP must be a valid number"),
+  cost_price: z.number().positive("Cost price must be positive").finite("Cost price must be a valid number"),
+  reorder_level: z.number().int("Reorder level must be an integer").nonnegative("Reorder level cannot be negative"),
+  vendor_name: z.string().trim().min(1, "Vendor name is required").max(200, "Vendor name must be less than 200 characters"),
+});
 
 interface Product {
   id: string;
@@ -117,7 +132,7 @@ export default function Products() {
     e.preventDefault();
 
     try {
-      const { error } = await supabase.from("products").insert({
+      const validation = productSchema.safeParse({
         name: newProduct.name,
         brand: newProduct.brand,
         master_sku: newProduct.master_sku,
@@ -130,6 +145,13 @@ export default function Products() {
         reorder_level: parseInt(newProduct.reorder_level),
         vendor_name: newProduct.vendor_name,
       });
+
+      if (!validation.success) {
+        toast.error(validation.error.issues[0].message);
+        return;
+      }
+
+      const { error } = await supabase.from("products").insert(validation.data);
 
       if (error) throw error;
 
@@ -145,21 +167,28 @@ export default function Products() {
     if (!editingProduct) return;
 
     try {
+      const validation = productSchema.safeParse({
+        name: editingProduct.name,
+        brand: editingProduct.brand,
+        master_sku: editingProduct.master_sku,
+        color: editingProduct.color,
+        brand_size: editingProduct.brand_size,
+        standard_size: editingProduct.standard_size,
+        barcode: editingProduct.barcode,
+        mrp: editingProduct.mrp,
+        cost_price: editingProduct.cost_price,
+        reorder_level: editingProduct.reorder_level,
+        vendor_name: editingProduct.vendor_name,
+      });
+
+      if (!validation.success) {
+        toast.error(validation.error.issues[0].message);
+        return;
+      }
+
       const { error } = await supabase
         .from("products")
-        .update({
-          name: editingProduct.name,
-          brand: editingProduct.brand,
-          master_sku: editingProduct.master_sku,
-          color: editingProduct.color,
-          brand_size: editingProduct.brand_size,
-          standard_size: editingProduct.standard_size,
-          barcode: editingProduct.barcode,
-          mrp: editingProduct.mrp,
-          cost_price: editingProduct.cost_price,
-          reorder_level: editingProduct.reorder_level,
-          vendor_name: editingProduct.vendor_name,
-        })
+        .update(validation.data)
         .eq("id", editingProduct.id);
 
       if (error) throw error;
@@ -244,23 +273,14 @@ export default function Products() {
             vendor_name: row.vendor_name || row['Vendor Name'],
           };
 
-          // Validate required fields (barcode is now optional)
-          const requiredFields = ['name', 'brand', 'master_sku', 'vendor_name'];
-          const missingFields = requiredFields.filter(field => !product[field as keyof typeof product]);
+          // Validate using Zod schema
+          const validation = productSchema.safeParse(product);
           
-          if (missingFields.length > 0) {
-            throw new Error(`Row ${index + 2}: Missing required fields: ${missingFields.join(', ')}`);
+          if (!validation.success) {
+            throw new Error(`Row ${index + 2}: ${validation.error.issues[0].message}`);
           }
 
-          if (isNaN(product.mrp)) {
-            throw new Error(`Row ${index + 2}: Invalid MRP value`);
-          }
-
-          if (isNaN(product.cost_price)) {
-            throw new Error(`Row ${index + 2}: Invalid Cost Price value`);
-          }
-
-          return product;
+          return validation.data;
         });
 
       const { error } = await supabase.from("products").insert(productsToInsert);
