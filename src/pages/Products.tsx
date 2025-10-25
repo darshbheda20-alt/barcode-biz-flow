@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Search, Edit, Trash2, Package, Plus, Upload, Download } from "lucide-react";
+import { Search, Edit, Trash2, Package, Plus, Upload, Download, List, Grid3x3 } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from 'xlsx';
 import BarcodeScanner from "@/components/BarcodeScanner";
+import ProductGroupedView from "@/components/ProductGroupedView";
 
 interface Product {
   id: string;
@@ -34,6 +35,7 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isAddMode, setIsAddMode] = useState(false);
+  const [viewMode, setViewMode] = useState<"list" | "grouped">("list");
   const [newProduct, setNewProduct] = useState({
     name: "",
     brand: "",
@@ -306,6 +308,26 @@ export default function Products() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
+              <div className="flex border rounded-md">
+                <Button
+                  variant={viewMode === "list" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("list")}
+                  className="rounded-r-none"
+                >
+                  <List className="h-4 w-4 mr-2" />
+                  List
+                </Button>
+                <Button
+                  variant={viewMode === "grouped" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("grouped")}
+                  className="rounded-l-none"
+                >
+                  <Grid3x3 className="h-4 w-4 mr-2" />
+                  Grouped
+                </Button>
+              </div>
               <Button variant="outline" onClick={handleDownloadTemplate}>
                 <Download className="mr-2 h-4 w-4" />
                 Download Template
@@ -336,6 +358,12 @@ export default function Products() {
               <Package className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
               <p className="text-muted-foreground">No products found</p>
             </div>
+          ) : viewMode === "grouped" ? (
+            <ProductGroupedView
+              products={filteredProducts}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+            />
           ) : (
             <div className="space-y-2">
               {filteredProducts.map((product) => (
