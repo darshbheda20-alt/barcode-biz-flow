@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Search, Edit, Trash2, Package, Plus, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from 'xlsx';
+import BarcodeScanner from "@/components/BarcodeScanner";
 
 interface Product {
   id: string;
@@ -421,11 +422,14 @@ export default function Products() {
 
                 <div className="space-y-2">
                   <Label htmlFor="new-barcode">Barcode</Label>
-                  <Input
-                    id="new-barcode"
-                    value={newProduct.barcode}
-                    onChange={(e) => setNewProduct({ ...newProduct, barcode: e.target.value })}
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="new-barcode"
+                      value={newProduct.barcode}
+                      onChange={(e) => setNewProduct({ ...newProduct, barcode: e.target.value })}
+                    />
+                    <BarcodeScanner onScan={(code) => setNewProduct({ ...newProduct, barcode: code })} />
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -555,13 +559,16 @@ export default function Products() {
 
                 <div className="space-y-2">
                   <Label htmlFor="edit-barcode">Barcode</Label>
-                  <Input
-                    id="edit-barcode"
-                    value={editingProduct.barcode}
-                    onChange={(e) =>
-                      setEditingProduct({ ...editingProduct, barcode: e.target.value })
-                    }
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="edit-barcode"
+                      value={editingProduct.barcode || ""}
+                      onChange={(e) =>
+                        setEditingProduct({ ...editingProduct, barcode: e.target.value })
+                      }
+                    />
+                    <BarcodeScanner onScan={(code) => setEditingProduct({ ...editingProduct, barcode: code })} />
+                  </div>
                 </div>
 
                 <div className="space-y-2">
