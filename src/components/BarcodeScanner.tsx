@@ -14,6 +14,14 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
   const [scannedCode, setScannedCode] = useState<string>('');
 
   const { ref } = useZxing({
+    paused: !isOpen,
+    constraints: {
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    },
     onDecodeResult(result) {
       const code = result.getText();
       setScannedCode(code);
@@ -23,6 +31,10 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
     },
     onError(error) {
       console.error('Scan error:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.toLowerCase().includes('permission')) {
+        toast.error('Camera permission denied. Please allow camera access.');
+      }
     },
   });
 

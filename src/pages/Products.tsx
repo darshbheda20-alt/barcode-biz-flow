@@ -313,13 +313,20 @@ export default function Products() {
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <CardTitle>All Products</CardTitle>
-              <CardDescription>Manage your product catalog</CardDescription>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>All Products</CardTitle>
+                <CardDescription>Manage your product catalog</CardDescription>
+              </div>
+              <Button onClick={handleAddNew} size="sm" className="md:hidden">
+                <Plus className="h-4 w-4" />
+              </Button>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="relative w-64">
+            
+            {/* Search and View Toggle - Always visible */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Search products..."
@@ -328,45 +335,51 @@ export default function Products() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              <div className="flex border rounded-md">
-                <Button
-                  variant={viewMode === "list" ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setViewMode("list")}
-                  className="rounded-r-none"
-                >
-                  <List className="h-4 w-4 mr-2" />
-                  List
+              
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* View Toggle - Now visible on mobile */}
+                <div className="flex border rounded-md">
+                  <Button
+                    variant={viewMode === "list" ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => setViewMode("list")}
+                    className="rounded-r-none"
+                  >
+                    <List className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">List</span>
+                  </Button>
+                  <Button
+                    variant={viewMode === "grouped" ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => setViewMode("grouped")}
+                    className="rounded-l-none"
+                  >
+                    <Grid3x3 className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">Grouped</span>
+                  </Button>
+                </div>
+                
+                {/* Desktop buttons */}
+                <Button variant="outline" size="sm" onClick={handleDownloadTemplate} className="hidden md:flex">
+                  <Download className="mr-2 h-4 w-4" />
+                  Download Template
                 </Button>
-                <Button
-                  variant={viewMode === "grouped" ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setViewMode("grouped")}
-                  className="rounded-l-none"
-                >
-                  <Grid3x3 className="h-4 w-4 mr-2" />
-                  Grouped
+                <Button variant="outline" size="sm" onClick={() => document.getElementById('excel-upload')?.click()} className="hidden md:flex">
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import Excel
+                </Button>
+                <input
+                  id="excel-upload"
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={handleFileImport}
+                />
+                <Button onClick={handleAddNew} size="sm" className="hidden md:flex">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Product
                 </Button>
               </div>
-              <Button variant="outline" onClick={handleDownloadTemplate}>
-                <Download className="mr-2 h-4 w-4" />
-                Download Template
-              </Button>
-              <Button variant="outline" onClick={() => document.getElementById('excel-upload')?.click()}>
-                <Upload className="mr-2 h-4 w-4" />
-                Import Excel
-              </Button>
-              <input
-                id="excel-upload"
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                onChange={handleFileImport}
-              />
-              <Button onClick={handleAddNew}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Product
-              </Button>
             </div>
           </div>
         </CardHeader>
