@@ -31,25 +31,48 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
     }
   }, []);
 
-  // Enumerate camera devices
+  // Enumerate camera devices after permission is granted
   useEffect(() => {
-    if (isOpen && !isInPreview) {
-      navigator.mediaDevices.enumerateDevices()
+    if (isOpen && !isInPreview && !showManualInput) {
+      // Request camera permission first
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(stream => {
+          // Stop the test stream
+          stream.getTracks().forEach(track => track.stop());
+          
+          // Now enumerate devices
+          return navigator.mediaDevices.enumerateDevices();
+        })
         .then(deviceList => {
           const videoDevices = deviceList.filter(device => device.kind === 'videoinput');
           setDevices(videoDevices);
           if (videoDevices.length > 0 && !selectedDeviceId) {
-            // Prefer back camera on mobile, or first USB camera on desktop
-            const backCamera = videoDevices.find(d => d.label.toLowerCase().includes('back'));
+            // Prefer back camera on mobile
+            const backCamera = videoDevices.find(d => 
+              d.label.toLowerCase().includes('back') || 
+              d.label.toLowerCase().includes('rear') ||
+              d.label.toLowerCase().includes('environment')
+            );
             setSelectedDeviceId(backCamera?.deviceId || videoDevices[0].deviceId);
           }
         })
         .catch(err => {
-          console.error('Error enumerating devices:', err);
-          setCameraError('Unable to list camera devices. Please check browser permissions.');
+          console.error('Error accessing camera:', err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          
+          if (errorMessage.toLowerCase().includes('permission') || 
+              errorMessage.toLowerCase().includes('denied') ||
+              err.name === 'NotAllowedError') {
+            setCameraError('Camera permission denied. Please enable camera access in your browser settings.');
+          } else if (errorMessage.toLowerCase().includes('notfound') || 
+                     err.name === 'NotFoundError') {
+            setCameraError('No camera found on this device.');
+          } else {
+            setCameraError('Unable to access camera. Please check your settings and try again.');
+          }
         });
     }
-  }, [isOpen, isInPreview]);
+  }, [isOpen, isInPreview, showManualInput, selectedDeviceId]);
 
   const { ref } = useZxing({
     paused: !isOpen || isInPreview || showManualInput,
@@ -57,12 +80,12 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
     constraints: {
       video: selectedDeviceId ? {
         deviceId: { exact: selectedDeviceId },
-        width: { min: 640, ideal: 1280, max: 1920 },
-        height: { min: 480, ideal: 720, max: 1080 }
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       } : {
-        facingMode: { ideal: 'environment' },
-        width: { min: 640, ideal: 1280, max: 1920 },
-        height: { min: 480, ideal: 720, max: 1080 }
+        facingMode: 'environment',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       },
       audio: false
     },
