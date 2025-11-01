@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { QrCode, PackagePlus, Package, AlertTriangle } from "lucide-react";
 import { z } from "zod";
+import { getUserFriendlyError } from "@/lib/errorHandling";
 
 const scanSchema = z.object({
   barcode: z.string().trim().min(1, "Barcode is required").max(100, "Barcode must be less than 100 characters"),
@@ -82,7 +83,8 @@ export default function ScanLog() {
       toast.success("Stock received successfully!");
       setReceiveData({ barcode: "", quantity: "" });
     } catch (error: any) {
-      toast.error(error.message || "Failed to receive stock");
+      console.error("Error receiving stock:", error);
+      toast.error(getUserFriendlyError(error));
     } finally {
       setLoading(false);
     }
@@ -157,7 +159,8 @@ export default function ScanLog() {
         tagId: "",
       });
     } catch (error: any) {
-      toast.error(error.message || "Failed to pick order");
+      console.error("Error picking order:", error);
+      toast.error(getUserFriendlyError(error));
     } finally {
       setLoading(false);
     }
@@ -201,7 +204,8 @@ export default function ScanLog() {
       toast.success("Damage recorded successfully!");
       setDamageData({ barcode: "", quantity: "" });
     } catch (error: any) {
-      toast.error(error.message || "Failed to record damage");
+      console.error("Error recording damage:", error);
+      toast.error(getUserFriendlyError(error));
     } finally {
       setLoading(false);
     }

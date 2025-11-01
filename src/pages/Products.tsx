@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx';
 import BarcodeScanner from "@/components/BarcodeScanner";
 import ProductGroupedView from "@/components/ProductGroupedView";
 import { z } from "zod";
+import { getUserFriendlyError } from "@/lib/errorHandling";
 
 const productSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(200, "Name must be less than 200 characters"),
@@ -158,7 +159,8 @@ export default function Products() {
       toast.success("Product added successfully!");
       setIsDialogOpen(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to add product");
+      console.error("Error adding product:", error);
+      toast.error(getUserFriendlyError(error));
     }
   };
 
@@ -197,7 +199,8 @@ export default function Products() {
       setIsDialogOpen(false);
       setEditingProduct(null);
     } catch (error: any) {
-      toast.error(error.message || "Failed to update product");
+      console.error("Error updating product:", error);
+      toast.error(getUserFriendlyError(error));
     }
   };
 
@@ -213,7 +216,8 @@ export default function Products() {
 
       toast.success("Product deleted successfully!");
     } catch (error: any) {
-      toast.error(error.message || "Failed to delete product");
+      console.error("Error deleting product:", error);
+      toast.error(getUserFriendlyError(error));
     }
   };
 
@@ -291,7 +295,7 @@ export default function Products() {
       e.target.value = '';
     } catch (error: any) {
       console.error("Import error:", error);
-      toast.error(error.message || "Failed to import products");
+      toast.error(getUserFriendlyError(error));
       e.target.value = '';
     }
   };

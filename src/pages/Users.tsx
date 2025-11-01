@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UserPlus, Trash2, Shield } from "lucide-react";
 import { z } from "zod";
+import { getUserFriendlyError } from "@/lib/errorHandling";
 
 const userSchema = z.object({
   email: z.string().email("Invalid email address").max(255, "Email too long"),
@@ -132,10 +133,11 @@ export default function Users() {
     });
 
     if (error) {
+      console.error("Error creating user:", error);
       toast({
         variant: "destructive",
         title: "Error Creating User",
-        description: error.message,
+        description: getUserFriendlyError(error),
       });
       return;
     }

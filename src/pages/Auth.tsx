@@ -8,6 +8,23 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Package } from "lucide-react";
+import { z } from "zod";
+import { getUserFriendlyError } from "@/lib/errorHandling";
+
+const authSchema = z.object({
+  email: z.string()
+    .trim()
+    .email("Please enter a valid email address")
+    .max(255, "Email must be less than 255 characters"),
+  password: z.string()
+    .min(6, "Password must be at least 6 characters")
+    .max(72, "Password must be less than 72 characters"),
+  fullName: z.string()
+    .trim()
+    .min(1, "Name is required")
+    .max(100, "Name must be less than 100 characters")
+    .optional(),
+});
 
 export default function Auth() {
   const navigate = useNavigate();
@@ -38,22 +55,46 @@ export default function Auth() {
     e.preventDefault();
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      // Validate inputs
+      const validated = authSchema.parse({ 
+        email: email.trim().toLowerCase(), 
+        password 
+      });
 
-    if (error) {
-      toast({
-        variant: "destructive",
-        title: "Error signing in",
-        description: error.message,
+      const { error } = await supabase.auth.signInWithPassword({
+        email: validated.email,
+        password: validated.password,
       });
-    } else {
-      toast({
-        title: "Welcome back!",
-        description: "You have successfully signed in.",
-      });
+
+      if (error) {
+        console.error('Sign in error:', error);
+        toast({
+          variant: "destructive",
+          title: "Error signing in",
+          description: getUserFriendlyError(error),
+        });
+      } else {
+        toast({
+          title: "Welcome back!",
+          description: "You have successfully signed in.",
+        });
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        toast({
+          variant: "destructive",
+          title: "Validation error",
+          description: error.issues[0].message,
+        });
+      } else {
+        console.error('Unexpected error:', error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "An unexpected error occurred. Please try again.",
+        });
+      }
     }
 
     setLoading(false);
@@ -63,28 +104,53 @@ export default function Auth() {
     e.preventDefault();
     setLoading(true);
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-        },
-        emailRedirectTo: `${window.location.origin}/`,
-      },
-    });
+    try {
+      // Validate inputs
+      const validated = authSchema.parse({ 
+        email: email.trim().toLowerCase(), 
+        password,
+        fullName: fullName.trim()
+      });
 
-    if (error) {
-      toast({
-        variant: "destructive",
-        title: "Error signing up",
-        description: error.message,
+      const { error } = await supabase.auth.signUp({
+        email: validated.email,
+        password: validated.password,
+        options: {
+          data: {
+            full_name: validated.fullName,
+          },
+          emailRedirectTo: `${window.location.origin}/`,
+        },
       });
-    } else {
-      toast({
-        title: "Account created!",
-        description: "You can now sign in with your credentials.",
-      });
+
+      if (error) {
+        console.error('Sign up error:', error);
+        toast({
+          variant: "destructive",
+          title: "Error signing up",
+          description: getUserFriendlyError(error),
+        });
+      } else {
+        toast({
+          title: "Account created!",
+          description: "You can now sign in with your credentials.",
+        });
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        toast({
+          variant: "destructive",
+          title: "Validation error",
+          description: error.issues[0].message,
+        });
+      } else {
+        console.error('Unexpected error:', error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "An unexpected error occurred. Please try again.",
+        });
+      }
     }
 
     setLoading(false);
