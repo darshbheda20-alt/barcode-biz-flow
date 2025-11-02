@@ -1,15 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Camera, X, AlertCircle, ExternalLink, Keyboard, Zap, ZapOff, Crosshair, Info } from 'lucide-react';
+import { Camera, X, AlertCircle, ExternalLink, Keyboard, Zap, ZapOff, Crosshair, Info, CheckCircle2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
+}
+
+interface DecodeResult {
+  barcode: string;
+  timestamp: number;
+  confidence: number;
+  checksumValid: boolean;
+  format: string;
 }
 
 export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
@@ -33,6 +42,17 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
     successes: 0,
     resolution: ''
   });
+  const [pendingBarcode, setPendingBarcode] = useState<string | null>(null);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [confirmationData, setConfirmationData] = useState<{
+    barcode: string;
+    confidence: number;
+    checksumValid: boolean;
+    reason: string;
+  } | null>(null);
+
+  const recentDecodesRef = useRef<DecodeResult[]>([]);
+  const consensusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -60,8 +80,8 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
       { type: 'module' }
     );
 
-    worker.onmessage = (e: MessageEvent) => {
-      const { success, barcode, decodeTime, error } = e.data;
+    worker.onmessage = async (e: MessageEvent) => {
+      const { success, barcode, decodeTime, error, confidence, checksumValid, format } = e.data;
       
       setIsDecoding(false);
       decodingRef.current = false;
@@ -88,23 +108,83 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
       });
 
       if (success && barcode) {
-        // Haptic feedback
-        if ('vibrate' in navigator) {
-          navigator.vibrate(200);
+        // Add to recent decodes for consensus
+        const now = Date.now();
+        recentDecodesRef.current.push({
+          barcode,
+          timestamp: now,
+          confidence: confidence || 1,
+          checksumValid: checksumValid !== false,
+          format: format || 'UNKNOWN'
+        });
+
+        // Keep only last 5 decodes within 2 seconds
+        recentDecodesRef.current = recentDecodesRef.current.filter(d => now - d.timestamp < 2000).slice(-5);
+
+        // Check for consensus
+        const consensus = checkConsensus(recentDecodesRef.current);
+        
+        if (consensus.hasConsensus) {
+          // Log successful scan
+          logScan({
+            barcode: consensus.barcode!,
+            framesUsed: consensus.matchCount,
+            confidence: consensus.avgConfidence,
+            checksumValid: consensus.checksumValid,
+            autoAccepted: true
+          });
+
+          // Auto-accept with feedback
+          if ('vibrate' in navigator) {
+            navigator.vibrate(200);
+          }
+
+          try {
+            const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZUQ0PVqzn77BdGAg+ltryxnYmBSuAzvLaiTcIGWi77een');
+            audio.play().catch(() => {});
+          } catch (e) {
+            // Audio not supported
+          }
+
+          onScan(consensus.barcode!);
+          toast.success(`Barcode scanned: ${consensus.barcode}`);
+          stopCamera();
+          setIsOpen(false);
+          recentDecodesRef.current = [];
+        } else if (recentDecodesRef.current.length >= 3) {
+          // After 3+ attempts without consensus, check if we should show confirmation
+          const mostRecent = recentDecodesRef.current[recentDecodesRef.current.length - 1];
+          
+          // Check if barcode exists in products or has low confidence
+          const needsConfirmation = await shouldRequireConfirmation(
+            mostRecent.barcode, 
+            mostRecent.confidence,
+            mostRecent.checksumValid
+          );
+
+          if (needsConfirmation.required) {
+            // Show confirmation dialog
+            stopCamera();
+            setConfirmationData({
+              barcode: mostRecent.barcode,
+              confidence: mostRecent.confidence,
+              checksumValid: mostRecent.checksumValid,
+              reason: needsConfirmation.reason
+            });
+            setShowConfirmation(true);
+            recentDecodesRef.current = [];
+          }
         }
 
-        // Audio feedback
-        try {
-          const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZUQ0PVqzn77BdGAg+ltryxnYmBSuAzvLaiTcIGWi77een');
-          audio.play().catch(() => {}); // Ignore errors
-        } catch (e) {
-          // Audio not supported
+        // Set consensus timeout - if no consensus in 1.5s, clear and retry
+        if (consensusTimeoutRef.current) {
+          clearTimeout(consensusTimeoutRef.current);
         }
-
-        onScan(barcode);
-        toast.success(`Barcode scanned: ${barcode}`);
-        stopCamera();
-        setIsOpen(false);
+        consensusTimeoutRef.current = setTimeout(() => {
+          if (recentDecodesRef.current.length > 0) {
+            recentDecodesRef.current = [];
+          }
+        }, 1500);
       }
 
       if (error) {
@@ -116,8 +196,118 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
 
     return () => {
       worker.terminate();
+      if (consensusTimeoutRef.current) {
+        clearTimeout(consensusTimeoutRef.current);
+      }
     };
   }, [onScan]);
+
+  // Consensus check: require same code in 2+ consecutive frames OR majority in last 3-5
+  const checkConsensus = (decodes: DecodeResult[]) => {
+    if (decodes.length < 2) {
+      return { hasConsensus: false, barcode: null, matchCount: 0, avgConfidence: 0, checksumValid: false };
+    }
+
+    // Check consecutive frames
+    const last = decodes[decodes.length - 1];
+    const secondLast = decodes[decodes.length - 2];
+    
+    if (last.barcode === secondLast.barcode && last.checksumValid && secondLast.checksumValid) {
+      return {
+        hasConsensus: true,
+        barcode: last.barcode,
+        matchCount: 2,
+        avgConfidence: (last.confidence + secondLast.confidence) / 2,
+        checksumValid: true
+      };
+    }
+
+    // Check majority in last 3-5 frames
+    if (decodes.length >= 3) {
+      const barcodeCounts = new Map<string, { count: number; confidence: number; valid: boolean }>();
+      
+      decodes.forEach(d => {
+        const existing = barcodeCounts.get(d.barcode) || { count: 0, confidence: 0, valid: true };
+        barcodeCounts.set(d.barcode, {
+          count: existing.count + 1,
+          confidence: existing.confidence + d.confidence,
+          valid: existing.valid && d.checksumValid
+        });
+      });
+
+      // Find majority (more than half)
+      const majority = Array.from(barcodeCounts.entries())
+        .find(([_, data]) => data.count >= Math.ceil(decodes.length / 2) && data.valid);
+
+      if (majority) {
+        const [barcode, data] = majority;
+        return {
+          hasConsensus: true,
+          barcode,
+          matchCount: data.count,
+          avgConfidence: data.confidence / data.count,
+          checksumValid: data.valid
+        };
+      }
+    }
+
+    return { hasConsensus: false, barcode: null, matchCount: 0, avgConfidence: 0, checksumValid: false };
+  };
+
+  // Check if barcode needs manual confirmation
+  const shouldRequireConfirmation = async (
+    barcode: string, 
+    confidence: number,
+    checksumValid: boolean
+  ): Promise<{ required: boolean; reason: string }> => {
+    // Low confidence threshold
+    if (confidence < 2) {
+      return { required: true, reason: 'Low confidence detection' };
+    }
+
+    // Invalid checksum
+    if (!checksumValid) {
+      return { required: true, reason: 'Invalid checksum' };
+    }
+
+    // Check if barcode exists in products
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id')
+        .eq('barcode', barcode)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error checking product:', error);
+        return { required: true, reason: 'Unable to verify product' };
+      }
+
+      if (!data) {
+        return { required: true, reason: 'Product not found in database' };
+      }
+
+      // Product exists, high confidence, valid checksum - no confirmation needed
+      return { required: false, reason: '' };
+    } catch (err) {
+      console.error('Error in product validation:', err);
+      return { required: true, reason: 'Validation error' };
+    }
+  };
+
+  // Log scan for QA
+  const logScan = (data: {
+    barcode: string;
+    framesUsed: number;
+    confidence: number;
+    checksumValid: boolean;
+    autoAccepted: boolean;
+  }) => {
+    console.log('[SCAN LOG]', {
+      timestamp: new Date().toISOString(),
+      ...data
+    });
+  };
 
   // Enumerate camera devices
   useEffect(() => {
@@ -344,12 +534,51 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
 
   const handleManualSubmit = () => {
     if (manualCode.trim()) {
+      logScan({
+        barcode: manualCode.trim(),
+        framesUsed: 0,
+        confidence: 0,
+        checksumValid: false,
+        autoAccepted: false
+      });
       onScan(manualCode.trim());
       toast.success(`Barcode entered: ${manualCode.trim()}`);
       setIsOpen(false);
       setManualCode('');
     } else {
       toast.error('Please enter a barcode');
+    }
+  };
+
+  const handleConfirmBarcode = () => {
+    if (confirmationData) {
+      logScan({
+        barcode: confirmationData.barcode,
+        framesUsed: recentDecodesRef.current.length,
+        confidence: confirmationData.confidence,
+        checksumValid: confirmationData.checksumValid,
+        autoAccepted: false
+      });
+      
+      if ('vibrate' in navigator) {
+        navigator.vibrate(200);
+      }
+      
+      onScan(confirmationData.barcode);
+      toast.success(`Barcode confirmed: ${confirmationData.barcode}`);
+      setShowConfirmation(false);
+      setConfirmationData(null);
+      setIsOpen(false);
+    }
+  };
+
+  const handleRetryBarcode = () => {
+    setShowConfirmation(false);
+    setConfirmationData(null);
+    recentDecodesRef.current = [];
+    // Restart camera if it was stopped
+    if (!streamRef.current && selectedDeviceId) {
+      startCamera();
     }
   };
 
@@ -369,6 +598,8 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
       setCameraError(null);
       setManualCode('');
       setShowManualInput(false);
+      setShowConfirmation(false);
+      setConfirmationData(null);
       setDiagnostics({
         fps: 0,
         avgDecodeTime: 0,
@@ -379,6 +610,10 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
       });
       fpsCounterRef.current = [];
       decodeTimesRef.current = [];
+      recentDecodesRef.current = [];
+      if (consensusTimeoutRef.current) {
+        clearTimeout(consensusTimeoutRef.current);
+      }
     }
   }, [isOpen]);
 
@@ -586,7 +821,52 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
               </>
             )}
 
-            {(showManualInput || isInPreview) && (
+            {showConfirmation && confirmationData && (
+              <div className="space-y-4 p-4 border border-yellow-500/20 bg-yellow-500/10 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                  <div className="space-y-2 flex-1">
+                    <p className="font-medium text-sm">Low confidence — please confirm</p>
+                    <p className="text-xs text-muted-foreground">{confirmationData.reason}</p>
+                    <div className="bg-background rounded px-3 py-2 font-mono text-lg text-center">
+                      {confirmationData.barcode}
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-3 gap-2">
+                  <Button 
+                    onClick={handleConfirmBarcode}
+                    className="w-full"
+                    size="sm"
+                  >
+                    <CheckCircle2 className="mr-1 h-4 w-4" />
+                    Confirm
+                  </Button>
+                  <Button 
+                    onClick={handleRetryBarcode}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <Camera className="mr-1 h-4 w-4" />
+                    Retry
+                  </Button>
+                  <Button 
+                    onClick={() => {
+                      setShowConfirmation(false);
+                      setShowManualInput(true);
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <Keyboard className="mr-1 h-4 w-4" />
+                    Type
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {(showManualInput || isInPreview) && !showConfirmation && (
               <div className="space-y-3">
                 <Label htmlFor="manual-barcode">Enter Barcode Manually</Label>
                 <Input
@@ -604,31 +884,33 @@ export default function BarcodeScanner({ onScan }: BarcodeScannerProps) {
               </div>
             )}
 
-            <div className="flex gap-2">
-              {!isInPreview && (
+            {!showConfirmation && (
+              <div className="flex gap-2">
+                {!isInPreview && (
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => {
+                      setShowManualInput(!showManualInput);
+                      if (!showManualInput) {
+                        stopCamera();
+                      }
+                    }}
+                  >
+                    <Keyboard className="mr-2 h-4 w-4" />
+                    {showManualInput ? 'Use Camera' : 'Type Manually'}
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   className="flex-1"
-                  onClick={() => {
-                    setShowManualInput(!showManualInput);
-                    if (!showManualInput) {
-                      stopCamera();
-                    }
-                  }}
+                  onClick={() => setIsOpen(false)}
                 >
-                  <Keyboard className="mr-2 h-4 w-4" />
-                  {showManualInput ? 'Use Camera' : 'Type Manually'}
+                  <X className="mr-2 h-4 w-4" />
+                  Cancel
                 </Button>
-              )}
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setIsOpen(false)}
-              >
-                <X className="mr-2 h-4 w-4" />
-                Cancel
-              </Button>
-            </div>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

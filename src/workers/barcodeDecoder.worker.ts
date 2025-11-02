@@ -181,7 +181,37 @@ self.onmessage = (e: MessageEvent) => {
     const decodeTime = performance.now() - startTime;
     
     if (result) {
-      self.postMessage({ success: true, barcode: result, decodeTime });
+      // Extract result text from the decode result object
+      const luminanceSource = new RGBLuminanceSource(enhanced, width, height);
+      const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
+      
+      let fullResult: any = null;
+      try {
+        fullResult = reader.decode(binaryBitmap);
+      } catch (e) {
+        // If full decode fails, try thresholded
+        try {
+          const luminanceSource2 = new RGBLuminanceSource(thresholded, width, height);
+          const binaryBitmap2 = new BinaryBitmap(new HybridBinarizer(luminanceSource2));
+          fullResult = reader.decode(binaryBitmap2);
+        } catch (e2) {
+          // Fall back to basic result
+        }
+      }
+      
+      const barcodeText = result;
+      const format = fullResult?.getBarcodeFormat() || 0;
+      const confidence = fullResult?.getResultPoints()?.length || 1;
+      const checksumValid = validateChecksum(barcodeText, format);
+      
+      self.postMessage({ 
+        success: true, 
+        barcode: barcodeText,
+        format: format.toString(),
+        confidence,
+        checksumValid,
+        decodeTime 
+      });
     } else {
       self.postMessage({ success: false, decodeTime });
     }
@@ -194,3 +224,40 @@ self.onmessage = (e: MessageEvent) => {
     });
   }
 };
+
+// Checksum validation for EAN/UPC codes
+function validateChecksum(barcode: string, format: number): boolean {
+  const formatStr = format.toString();
+  
+  // EAN-13 checksum validation (format = 3)
+  if (formatStr === '3' && barcode.length === 13) {
+    const digits = barcode.split('').map(Number);
+    const check = digits.pop()!;
+    const sum = digits.reduce((acc, digit, i) => acc + digit * (i % 2 === 0 ? 1 : 3), 0);
+    return (10 - (sum % 10)) % 10 === check;
+  }
+  
+  // EAN-8 checksum validation (format = 4)
+  if (formatStr === '4' && barcode.length === 8) {
+    const digits = barcode.split('').map(Number);
+    const check = digits.pop()!;
+    const sum = digits.reduce((acc, digit, i) => acc + digit * (i % 2 === 0 ? 3 : 1), 0);
+    return (10 - (sum % 10)) % 10 === check;
+  }
+  
+  // UPC-A checksum validation (format = 5)
+  if (formatStr === '5' && barcode.length === 12) {
+    const digits = barcode.split('').map(Number);
+    const check = digits.pop()!;
+    const sum = digits.reduce((acc, digit, i) => acc + digit * (i % 2 === 0 ? 3 : 1), 0);
+    return (10 - (sum % 10)) % 10 === check;
+  }
+  
+  // UPC-E checksum validation (format = 6) - accept as valid
+  if (formatStr === '6' && barcode.length === 8) {
+    return true;
+  }
+  
+  // For CODE-128, CODE-39, QR codes, etc. - assume valid
+  return true;
+}

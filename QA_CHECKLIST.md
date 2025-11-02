@@ -1,7 +1,7 @@
-# Barcode Scanner Enhancement - QA Checklist
+# Barcode Scanner Accuracy & Consensus - QA Checklist
 
 ## Overview
-This PR implements significant improvements to the mobile barcode scanner, focusing on speed, robustness, and user experience.
+This PR implements multi-frame consensus, checksum validation, and confidence-based confirmation to prevent false positives while maintaining fast scanning speed.
 
 ## PR Description
 
@@ -53,6 +53,28 @@ This PR implements significant improvements to the mobile barcode scanner, focus
 - ✅ Average decode time in milliseconds
 - ✅ Success rate percentage with attempt counters
 
+#### 8. **Multi-Frame Consensus (NEW)**
+- ✅ Requires same barcode in 2+ consecutive frames OR majority of 3-5 frames
+- ✅ Prevents false positives from single-frame misreads
+- ✅ 1.5-second consensus timeout with automatic retry
+- ✅ Console logging with `framesUsed` count for QA validation
+
+#### 9. **Checksum Validation (NEW)**
+- ✅ EAN-13, EAN-8, UPC-A checksum validation
+- ✅ Invalid checksums trigger confirmation dialog
+- ✅ Other formats (CODE-128, QR) bypass checksum check
+
+#### 10. **Confidence-Based Confirmation (NEW)**
+- ✅ Low confidence scores trigger confirmation dialog
+- ✅ Product database validation (unknown products require confirmation)
+- ✅ One-tap confirmation UI: Confirm / Retry / Type buttons
+- ✅ Visual feedback showing detected code and reason for confirmation
+
+#### 11. **Scan Logging (NEW)**
+- ✅ Console logs for every accepted scan
+- ✅ Includes: timestamp, barcode, framesUsed, confidence, checksumValid, autoAccepted
+- ✅ Enables before/after comparison for accuracy improvements
+
 ---
 
 ## QA Testing Checklist
@@ -62,11 +84,93 @@ This PR implements significant improvements to the mobile barcode scanner, focus
 - [ ] Test on **mid-range Android** device (Android 9+)
 - [ ] Test on **desktop** (Chrome/Edge/Safari)
 - [ ] Prepare sample barcodes:
-  - [ ] Clear, well-lit barcode
+  - [ ] Clear, well-lit EAN-13 barcode
   - [ ] Faded/worn barcode
   - [ ] Barcode with glare
   - [ ] Small barcode (< 2cm wide)
   - [ ] QR code
+  - [ ] Barcode NOT in product database (for unknown product test)
+
+---
+
+### ✅ Accuracy & Consensus Tests (NEW - Critical)
+
+#### Test 0.1: Multi-Frame Consensus - Clear Barcode
+- [ ] Open scanner and scan a clear barcode
+- [ ] **Expected**: Auto-accept after 2 consecutive matching frames (< 500ms)
+- [ ] Open browser console, check `[SCAN LOG]` entry
+- [ ] **Expected**: Log shows `framesUsed: 2` and `autoAccepted: true`
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.2: Multi-Frame Consensus - Faded Barcode
+- [ ] Scan a faded barcode
+- [ ] **Expected**: System requires 2+ matching frames before accepting
+- [ ] **Expected**: No false positive auto-accepts
+- [ ] Check console log
+- [ ] **Expected**: `framesUsed: 2` or higher, `checksumValid: true`
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.3: Consensus Disagreement
+- [ ] Position scanner where multiple barcodes are partially visible
+- [ ] **Expected**: System does NOT auto-accept conflicting reads
+- [ ] **Expected**: After 3+ decode attempts without consensus, either shows confirmation dialog or times out
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.4: Checksum Validation - Valid EAN-13
+- [ ] Scan a valid EAN-13 barcode from product database
+- [ ] **Expected**: Checksum passes, auto-accepts
+- [ ] Check console: `checksumValid: true`
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.5: Checksum Validation - Invalid (Manual Test)
+- [ ] Create a test with an EAN-13 where last digit is changed
+- [ ] **Expected**: System detects invalid checksum
+- [ ] **Expected**: Confirmation dialog appears with "Invalid checksum" reason
+- [ ] **Actual**: Pass / Fail (Note: Hard to test without mock data)
+
+#### Test 0.6: Product Database Validation - Unknown Product
+- [ ] Scan a valid barcode that does NOT exist in products table
+- [ ] **Expected**: Confirmation dialog appears
+- [ ] **Expected**: Reason shows "Product not found in database"
+- [ ] **Expected**: Barcode displayed in large font with Confirm / Retry / Type buttons
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.7: Confirmation Dialog - Confirm Button
+- [ ] Trigger confirmation dialog (unknown product or low confidence)
+- [ ] Tap "Confirm" button
+- [ ] **Expected**: Barcode immediately accepted and populated in field
+- [ ] **Expected**: Modal closes
+- [ ] **Expected**: Success toast appears
+- [ ] Check console: `autoAccepted: false`
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.8: Confirmation Dialog - Retry Button
+- [ ] Trigger confirmation dialog
+- [ ] Tap "Retry" button
+- [ ] **Expected**: Confirmation dialog closes
+- [ ] **Expected**: Camera restarts
+- [ ] **Expected**: User can scan again
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.9: Confirmation Dialog - Type Button
+- [ ] Trigger confirmation dialog
+- [ ] Tap "Type" button
+- [ ] **Expected**: Switches to manual input mode
+- [ ] **Expected**: Input field focused and ready
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.10: Low Confidence Detection
+- [ ] Use a barcode with poor contrast or extreme angle
+- [ ] **Expected**: If confidence < 2 (few result points), triggers confirmation
+- [ ] **Expected**: Reason shows "Low confidence detection"
+- [ ] **Actual**: Pass / Fail
+
+#### Test 0.11: False Positive Prevention (Before/After)
+- [ ] Prepare 10 faded/glare-affected sample barcodes
+- [ ] Test with OLD scanner (if available): record false positive count
+- [ ] Test with NEW scanner: record false positive count
+- [ ] **Expected**: >80% reduction in false positives
+- [ ] **Actual**: Old FP: _____ / New FP: _____ (Reduction: ____%)
 
 ---
 
@@ -252,6 +356,7 @@ This PR implements significant improvements to the mobile barcode scanner, focus
 
 ## Acceptance Criteria Summary
 
+### Original Criteria (Still Valid)
 - [ ] **Speed**: Clear barcodes scan in < 500ms on iPhone and mid-range Android
 - [ ] **Robustness**: >90% success rate on faded/glare sample set (10 barcodes)
 - [ ] **CPU**: Main thread remains responsive with smooth animations
@@ -259,6 +364,15 @@ This PR implements significant improvements to the mobile barcode scanner, focus
 - [ ] **Haptic**: Vibration feedback on success
 - [ ] **Diagnostics**: Overlay shows accurate FPS, decode time, success rate
 - [ ] **Manual Fallback**: Always visible and functional
+
+### New Consensus & Accuracy Criteria
+- [ ] **Multi-Frame Consensus**: Same code required in 2+ consecutive frames OR majority of 3-5 frames
+- [ ] **No False Positives**: System does NOT auto-accept on single misread or disagreeing frames
+- [ ] **Checksum Validation**: EAN/UPC codes validated before auto-accept
+- [ ] **Product Validation**: Unknown products trigger confirmation (not auto-accept)
+- [ ] **Confirmation UI**: One-tap Confirm / Retry / Type workflow is fast and intuitive
+- [ ] **Logging**: Console logs show all scan metadata for QA analysis
+- [ ] **False Positive Reduction**: >80% reduction compared to single-frame acceptance
 
 ---
 
@@ -274,19 +388,27 @@ This PR implements significant improvements to the mobile barcode scanner, focus
 ## Demo Video Requirements
 
 Please record and attach:
-1. **iPhone video** (30-60 seconds):
-   - Show clear barcode scan (< 500ms)
-   - Show faded barcode scan with success
+1. **iPhone video** (60-90 seconds):
+   - Show clear barcode scan (< 500ms) with auto-accept
+   - Show console log with `framesUsed: 2` and `autoAccepted: true`
+   - Show faded barcode scan with consensus success
+   - Show unknown product triggering confirmation dialog
+   - Demonstrate Confirm / Retry / Type buttons
    - Show torch toggle working
    - Show diagnostics overlay with metrics
 
-2. **Android video** (30-60 seconds):
-   - Show clear barcode scan
+2. **Android video** (60-90 seconds):
+   - Show clear barcode scan with auto-accept
+   - Show confirmation dialog for low confidence code
+   - Demonstrate one-tap confirmation workflow
    - Show manual capture button
    - Show ROI adjustment working
+   - Show console logs with consensus data
 
 3. **Screenshots**:
    - Scanner with ROI overlay visible
+   - Confirmation dialog showing detected code and reason
+   - Console logs with `[SCAN LOG]` entries
    - Diagnostics overlay showing metrics
    - Torch controls (if available)
 
