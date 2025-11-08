@@ -180,6 +180,44 @@ export type Database = {
           },
         ]
       }
+      sku_aliases: {
+        Row: {
+          alias_type: string
+          alias_value: string
+          created_at: string
+          id: string
+          marketplace: string
+          product_id: string
+          updated_at: string
+        }
+        Insert: {
+          alias_type: string
+          alias_value: string
+          created_at?: string
+          id?: string
+          marketplace: string
+          product_id: string
+          updated_at?: string
+        }
+        Update: {
+          alias_type?: string
+          alias_value?: string
+          created_at?: string
+          id?: string
+          marketplace?: string
+          product_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sku_aliases_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           created_at: string

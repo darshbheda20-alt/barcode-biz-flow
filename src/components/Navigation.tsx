@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Package, PackagePlus, QrCode, ShoppingCart, ClipboardList, Users, LogOut, Menu } from "lucide-react";
+import { Package, PackagePlus, QrCode, ShoppingCart, ClipboardList, Users, LogOut, Menu, Tags } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -13,6 +13,7 @@ const navItems = [
   { path: "/scan", label: "Scan Log", icon: QrCode },
   { path: "/sales-orders", label: "Sales Orders", icon: ShoppingCart },
   { path: "/purchase-orders", label: "Purchase Orders", icon: ClipboardList },
+  { path: "/master-skus", label: "Master SKUs", icon: Tags, adminOnly: true },
   { path: "/users", label: "Users", icon: Users, adminOnly: true },
 ];
 
