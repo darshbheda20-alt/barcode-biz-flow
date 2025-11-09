@@ -25,6 +25,7 @@ type SKUAlias = {
   marketplace: string;
   alias_type: string;
   alias_value: string;
+  marketplace_sku?: string;
   master_sku?: string;
   product_name?: string;
 };
@@ -47,6 +48,7 @@ export default function MasterSKUs() {
     marketplace: "flipkart",
     alias_type: "fsn",
     alias_value: "",
+    marketplace_sku: "",
   });
 
   // Fetch products
@@ -74,6 +76,7 @@ export default function MasterSKUs() {
           marketplace,
           alias_type,
           alias_value,
+          marketplace_sku,
           products!inner(master_sku, name)
         `)
         .order("marketplace");
@@ -153,6 +156,7 @@ export default function MasterSKUs() {
       marketplace: "flipkart",
       alias_type: "fsn",
       alias_value: "",
+      marketplace_sku: "",
     });
   };
 
@@ -172,6 +176,7 @@ export default function MasterSKUs() {
       marketplace: alias.marketplace,
       alias_type: alias.alias_type,
       alias_value: alias.alias_value,
+      marketplace_sku: alias.marketplace_sku || "",
     });
     setShowAddDialog(true);
   };
@@ -184,6 +189,7 @@ export default function MasterSKUs() {
       "Marketplace": alias.marketplace,
       "Alias Type": alias.alias_type,
       "Alias Value": alias.alias_value,
+      "Marketplace SKU": alias.marketplace_sku || "",
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -213,6 +219,7 @@ export default function MasterSKUs() {
           const marketplace = row["Marketplace"] || row["marketplace"];
           const aliasType = row["Alias Type"] || row["alias_type"];
           const aliasValue = row["Alias Value"] || row["alias_value"];
+          const marketplaceSku = row["Marketplace SKU"] || row["marketplace_sku"] || "";
 
           if (!masterSku || !marketplace || !aliasType || !aliasValue) continue;
 
@@ -228,6 +235,7 @@ export default function MasterSKUs() {
             marketplace: marketplace.toLowerCase(),
             alias_type: aliasType.toLowerCase(),
             alias_value: aliasValue,
+            marketplace_sku: marketplaceSku,
           });
         }
 
@@ -429,6 +437,18 @@ export default function MasterSKUs() {
                   />
                 </div>
 
+                <div>
+                  <Label htmlFor="marketplace_sku">Marketplace SKU</Label>
+                  <Input
+                    id="marketplace_sku"
+                    value={formData.marketplace_sku}
+                    onChange={(e) =>
+                      setFormData({ ...formData, marketplace_sku: e.target.value })
+                    }
+                    placeholder="e.g., MKT-SKU-12345"
+                  />
+                </div>
+
                 <div className="flex gap-2 justify-end">
                   <Button
                     type="button"
@@ -491,6 +511,7 @@ export default function MasterSKUs() {
                         <TableHead>Marketplace</TableHead>
                         <TableHead>Alias Type</TableHead>
                         <TableHead>Alias Value</TableHead>
+                        <TableHead>Marketplace SKU</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -500,6 +521,7 @@ export default function MasterSKUs() {
                           <TableCell className="capitalize">{alias.marketplace}</TableCell>
                           <TableCell className="uppercase">{alias.alias_type}</TableCell>
                           <TableCell className="font-mono">{alias.alias_value}</TableCell>
+                          <TableCell className="font-mono">{alias.marketplace_sku || "—"}</TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-2 justify-end">
                               <Button
