@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Download, Upload, Trash2, Edit, Search } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -264,6 +265,23 @@ export default function MasterSKUs() {
     alias.alias_value.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Group aliases by master_sku
+  const groupedAliases = filteredAliases.reduce((acc, alias) => {
+    const key = `${alias.product_id}-${alias.master_sku}`;
+    if (!acc[key]) {
+      acc[key] = {
+        product_id: alias.product_id,
+        master_sku: alias.master_sku,
+        product_name: alias.product_name,
+        aliases: [],
+      };
+    }
+    acc[key].aliases.push(alias);
+    return acc;
+  }, {} as Record<string, { product_id: string; master_sku?: string; product_name?: string; aliases: SKUAlias[] }>);
+
+  const groupedData = Object.values(groupedAliases);
+
   return (
     <div className="container mx-auto py-8 px-4">
       <div className="flex justify-between items-center mb-6">
@@ -446,61 +464,69 @@ export default function MasterSKUs() {
       </div>
 
       <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Master SKU</TableHead>
-              <TableHead>Product Name</TableHead>
-              <TableHead>Marketplace</TableHead>
-              <TableHead>Alias Type</TableHead>
-              <TableHead>Alias Value</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : filteredAliases.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground">
-                  No aliases found. Add your first marketplace mapping.
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredAliases.map((alias) => (
-                <TableRow key={alias.id}>
-                  <TableCell className="font-mono">{alias.master_sku}</TableCell>
-                  <TableCell>{alias.product_name}</TableCell>
-                  <TableCell className="capitalize">{alias.marketplace}</TableCell>
-                  <TableCell className="uppercase">{alias.alias_type}</TableCell>
-                  <TableCell className="font-mono">{alias.alias_value}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex gap-2 justify-end">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleEdit(alias)}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => deleteAlias.mutate(alias.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        {isLoading ? (
+          <div className="p-8 text-center text-muted-foreground">Loading...</div>
+        ) : groupedData.length === 0 ? (
+          <div className="p-8 text-center text-muted-foreground">
+            No aliases found. Add your first marketplace mapping.
+          </div>
+        ) : (
+          <Accordion type="single" collapsible className="w-full">
+            {groupedData.map((group) => (
+              <AccordionItem key={group.product_id} value={group.product_id}>
+                <AccordionTrigger className="px-6 hover:no-underline hover:bg-muted/50">
+                  <div className="flex items-center gap-4 text-left w-full">
+                    <span className="font-mono font-semibold">{group.master_sku}</span>
+                    <span className="text-muted-foreground">—</span>
+                    <span>{group.product_name}</span>
+                    <span className="ml-auto text-sm text-muted-foreground mr-4">
+                      {group.aliases.length} {group.aliases.length === 1 ? 'alias' : 'aliases'}
+                    </span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent className="px-6 pb-4">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Marketplace</TableHead>
+                        <TableHead>Alias Type</TableHead>
+                        <TableHead>Alias Value</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {group.aliases.map((alias) => (
+                        <TableRow key={alias.id}>
+                          <TableCell className="capitalize">{alias.marketplace}</TableCell>
+                          <TableCell className="uppercase">{alias.alias_type}</TableCell>
+                          <TableCell className="font-mono">{alias.alias_value}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex gap-2 justify-end">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleEdit(alias)}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => deleteAlias.mutate(alias.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        )}
       </div>
     </div>
   );
