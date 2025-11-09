@@ -308,7 +308,7 @@ export default function MasterSKUs() {
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <Label htmlFor="product">Product</Label>
+                  <Label htmlFor="product">Select Product</Label>
                   <Select
                     value={formData.product_id}
                     onValueChange={(value) =>
@@ -327,6 +327,30 @@ export default function MasterSKUs() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {formData.product_id && (
+                  <>
+                    <div>
+                      <Label htmlFor="master_sku">Master SKU</Label>
+                      <Input
+                        id="master_sku"
+                        value={products.find(p => p.id === formData.product_id)?.master_sku || ""}
+                        readOnly
+                        className="bg-muted"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="product_name">Product Name</Label>
+                      <Input
+                        id="product_name"
+                        value={products.find(p => p.id === formData.product_id)?.name || ""}
+                        readOnly
+                        className="bg-muted"
+                      />
+                    </div>
+                  </>
+                )}
 
                 <div>
                   <Label htmlFor="marketplace">Marketplace</Label>
