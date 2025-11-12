@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Package, PackagePlus, QrCode, ShoppingCart, ClipboardList, Users, LogOut, Menu, Tags } from "lucide-react";
+import { Package, PackagePlus, QrCode, ShoppingCart, ClipboardList, Users, LogOut, Menu, Tags, ClipboardCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -11,6 +11,7 @@ const navItems = [
   { path: "/", label: "Inventory", icon: Package },
   { path: "/products", label: "Products", icon: PackagePlus },
   { path: "/scan", label: "Scan Log", icon: QrCode },
+  { path: "/process-orders", label: "Process Orders", icon: ClipboardCheck },
   { path: "/sales-orders", label: "Sales Orders", icon: ShoppingCart },
   { path: "/purchase-orders", label: "Purchase Orders", icon: ClipboardList },
   { path: "/master-skus", label: "Master SKUs", icon: Tags, adminOnly: true },

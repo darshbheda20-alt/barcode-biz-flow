@@ -8,6 +8,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import Inventory from "./pages/Inventory";
 import Products from "./pages/Products";
 import ScanLog from "./pages/ScanLog";
+import ProcessOrders from "./pages/ProcessOrders";
 import SalesOrders from "./pages/SalesOrders";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import Users from "./pages/Users";
@@ -29,6 +30,7 @@ const App = () => (
           <Route path="/" element={<ProtectedRoute><Inventory /></ProtectedRoute>} />
           <Route path="/products" element={<ProtectedRoute><Products /></ProtectedRoute>} />
           <Route path="/scan" element={<ProtectedRoute><ScanLog /></ProtectedRoute>} />
+          <Route path="/process-orders" element={<ProtectedRoute><ProcessOrders /></ProtectedRoute>} />
           <Route path="/sales-orders" element={<ProtectedRoute><SalesOrders /></ProtectedRoute>} />
           <Route path="/purchase-orders" element={<ProtectedRoute><PurchaseOrders /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />

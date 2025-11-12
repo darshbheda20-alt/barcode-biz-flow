@@ -14,6 +14,121 @@ export type Database = {
   }
   public: {
     Tables: {
+      printing_status: {
+        Row: {
+          created_at: string
+          id: string
+          invoice_file_path: string | null
+          invoice_printed: boolean
+          label_file_path: string | null
+          label_printed: boolean
+          printed_at: string | null
+          process_order_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          invoice_file_path?: string | null
+          invoice_printed?: boolean
+          label_file_path?: string | null
+          label_printed?: boolean
+          printed_at?: string | null
+          process_order_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invoice_file_path?: string | null
+          invoice_printed?: boolean
+          label_file_path?: string | null
+          label_printed?: boolean
+          printed_at?: string | null
+          process_order_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "printing_status_process_order_id_fkey"
+            columns: ["process_order_id"]
+            isOneToOne: true
+            referencedRelation: "process_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      process_orders: {
+        Row: {
+          amount: number | null
+          created_at: string
+          id: string
+          invoice_date: string | null
+          invoice_number: string | null
+          marketplace_sku: string | null
+          master_sku: string | null
+          order_id: string
+          packet_id: string | null
+          payment_type: string | null
+          platform: string
+          product_id: string | null
+          product_name: string | null
+          quantity: number
+          tag_id: string | null
+          tracking_id: string | null
+          updated_at: string
+          uploaded_file_path: string | null
+          workflow_status: string
+        }
+        Insert: {
+          amount?: number | null
+          created_at?: string
+          id?: string
+          invoice_date?: string | null
+          invoice_number?: string | null
+          marketplace_sku?: string | null
+          master_sku?: string | null
+          order_id: string
+          packet_id?: string | null
+          payment_type?: string | null
+          platform: string
+          product_id?: string | null
+          product_name?: string | null
+          quantity?: number
+          tag_id?: string | null
+          tracking_id?: string | null
+          updated_at?: string
+          uploaded_file_path?: string | null
+          workflow_status?: string
+        }
+        Update: {
+          amount?: number | null
+          created_at?: string
+          id?: string
+          invoice_date?: string | null
+          invoice_number?: string | null
+          marketplace_sku?: string | null
+          master_sku?: string | null
+          order_id?: string
+          packet_id?: string | null
+          payment_type?: string | null
+          platform?: string
+          product_id?: string | null
+          product_name?: string | null
+          quantity?: number
+          tag_id?: string | null
+          tracking_id?: string | null
+          updated_at?: string
+          uploaded_file_path?: string | null
+          workflow_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "process_orders_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       products: {
         Row: {
           available_units: number
