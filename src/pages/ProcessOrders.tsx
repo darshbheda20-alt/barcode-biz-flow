@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClipboardList, Printer, Package } from "lucide-react";
+import { FlipkartUpload } from "@/components/process-orders/FlipkartUpload";
+import { PicklistView } from "@/components/process-orders/PicklistView";
 
 export default function ProcessOrders() {
   const [activeTab, setActiveTab] = useState("picklist");
@@ -44,18 +46,7 @@ export default function ProcessOrders() {
             <CardContent>
               <div className="grid gap-6 md:grid-cols-3">
                 {/* Flipkart Section */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Flipkart</CardTitle>
-                    <CardDescription>Upload combined label + invoice PDFs</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      Upload multiple Flipkart PDFs containing both labels and invoices.
-                    </p>
-                    {/* File upload component will go here */}
-                  </CardContent>
-                </Card>
+                <FlipkartUpload onOrdersParsed={() => {}} />
 
                 {/* Amazon Section */}
                 <Card>
@@ -87,18 +78,7 @@ export default function ProcessOrders() {
               </div>
 
               <div className="mt-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Generated Picklists</CardTitle>
-                    <CardDescription>Grouped by Master SKU</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      Picklists will appear here after processing uploaded files.
-                    </p>
-                    {/* Picklist table will go here */}
-                  </CardContent>
-                </Card>
+                <PicklistView />
               </div>
             </CardContent>
           </Card>
