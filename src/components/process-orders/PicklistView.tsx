@@ -50,13 +50,27 @@ export const PicklistView = () => {
     };
   }, []);
 
-  const fetchPicklist = async () => {
+  const fetchPicklist = async (date?: Date) => {
     try {
-      const { data, error } = await supabase
-        .from('process_orders')
-        .select('*')
-        .in('workflow_status', ['pending', 'picklist_generated'])
-        .order('master_sku');
+      let query = supabase.from('process_orders').select('*');
+      
+      if (date) {
+        // Fetch archived picklist for specific date
+        const startOfDay = new Date(date);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(date);
+        endOfDay.setHours(23, 59, 59, 999);
+        
+        query = query
+          .eq('workflow_status', 'archived')
+          .gte('exported_at', startOfDay.toISOString())
+          .lte('exported_at', endOfDay.toISOString());
+      } else {
+        // Fetch current active picklist
+        query = query.in('workflow_status', ['pending', 'picklist_generated']);
+      }
+      
+      const { data, error } = await query.order('master_sku');
 
       if (error) throw error;
 
