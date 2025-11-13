@@ -76,10 +76,18 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
                            text.match(/AWB[:\s]+([A-Z0-9]+)/i);
       const trackingId = trackingMatch ? trackingMatch[1] : '';
 
-      // SKU ID pattern - from the table, captures the full SKU including size
-      const skuMatch = text.match(/SKU\s*ID[:\s]+([A-Z0-9\-]+(?:-[A-Z0-9]+)?)/i) ||
-                       text.match(/\|\s*([A-Z]+-[A-Z]+-[A-Z0-9]+-[A-Z]+-[A-Z0-9]+)\s*\|/i);
+      // SKU ID pattern - Multiple patterns to capture different formats
+      // Pattern 1: SKU ID: followed by SKU
+      // Pattern 2: SKU in table format
+      // Pattern 3: SKU on its own line
+      const skuMatch = text.match(/SKU\s*ID[:\s]+([A-Z0-9\-]+)/i) ||
+                       text.match(/SKU[:\s]+([A-Z0-9\-]+)/i) ||
+                       text.match(/\|\s*([A-Z]+-[A-Z]+-[A-Z0-9\-]+)\s*\|/i) ||
+                       text.match(/\b([A-Z]{4,}-[A-Z]{2,}-[A-Z0-9\-]{3,})\b/);
       const sku = skuMatch ? skuMatch[1].trim() : '';
+      
+      console.log('Extracted SKU:', sku);
+      console.log('Full text sample for debugging:', text.substring(0, 500));
 
       // Product Name - description from SKU table
       const productMatch = text.match(/SKU\s*ID.*?Description\s+QTY\s+([A-Z0-9\-]+)\s+(.+?)\s+\d+/is) ||
@@ -239,7 +247,14 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         }
 
         // Map to Master SKU
+        console.log('Attempting to map SKU:', parsedOrder.sku);
         const mapping = await mapSKUToMasterSKU(parsedOrder.sku);
+        
+        if (!mapping) {
+          console.warn(`Could not map SKU: ${parsedOrder.sku} - Check sku_aliases table for Flipkart`);
+        } else {
+          console.log('Successfully mapped to Master SKU:', mapping.masterSku);
+        }
         
         // Upload file to storage
         const storagePath = await uploadToStorage(file);
