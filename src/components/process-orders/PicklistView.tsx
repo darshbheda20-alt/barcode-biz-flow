@@ -56,18 +56,25 @@ export const PicklistView = () => {
 
       // Group by master SKU
       const grouped = (data || []).reduce((acc, order) => {
-        const key = order.master_sku || 'unmapped';
+        // Use master_sku if available, otherwise create unique key for unmapped
+        const key = order.master_sku || `unmapped_${order.marketplace_sku || order.id}`;
+        const displaySku = order.master_sku || 'Unmapped SKU';
+        
         if (!acc[key]) {
           acc[key] = {
-            masterSku: order.master_sku || 'Unmapped SKU',
+            masterSku: displaySku,
             productName: order.product_name || 'Unknown Product',
             totalQuantity: 0,
             orderIds: [],
             platform: order.platform
           };
         }
-        acc[key].totalQuantity += order.quantity;
-        acc[key].orderIds.push(order.order_id);
+        
+        // Only add quantity once per unique order_id to prevent duplicate counting
+        if (!acc[key].orderIds.includes(order.order_id)) {
+          acc[key].totalQuantity += order.quantity;
+          acc[key].orderIds.push(order.order_id);
+        }
         return acc;
       }, {} as Record<string, PicklistItem>);
 

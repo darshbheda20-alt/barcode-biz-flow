@@ -76,9 +76,10 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
                            text.match(/AWB[:\s]+([A-Z0-9]+)/i);
       const trackingId = trackingMatch ? trackingMatch[1] : '';
 
-      // SKU ID pattern - from the table
-      const skuMatch = text.match(/SKU\s*ID[:\s]+([A-Z0-9\-]+)/i);
-      const sku = skuMatch ? skuMatch[1] : '';
+      // SKU ID pattern - from the table, captures the full SKU including size
+      const skuMatch = text.match(/SKU\s*ID[:\s]+([A-Z0-9\-]+(?:-[A-Z0-9]+)?)/i) ||
+                       text.match(/\|\s*([A-Z]+-[A-Z]+-[A-Z0-9]+-[A-Z]+-[A-Z0-9]+)\s*\|/i);
+      const sku = skuMatch ? skuMatch[1].trim() : '';
 
       // Product Name - description from SKU table
       const productMatch = text.match(/SKU\s*ID.*?Description\s+QTY\s+([A-Z0-9\-]+)\s+(.+?)\s+\d+/is) ||
@@ -216,6 +217,23 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             file: file.name,
             status: 'error',
             message: 'Could not extract order data'
+          });
+          continue;
+        }
+
+        // Check for duplicate invoice number
+        const { data: existingOrder } = await supabase
+          .from('process_orders')
+          .select('invoice_number')
+          .eq('invoice_number', parsedOrder.invoiceNumber)
+          .eq('platform', 'flipkart')
+          .maybeSingle();
+
+        if (existingOrder) {
+          statusUpdates.push({
+            file: file.name,
+            status: 'error',
+            message: 'Duplicate: Invoice already uploaded'
           });
           continue;
         }
