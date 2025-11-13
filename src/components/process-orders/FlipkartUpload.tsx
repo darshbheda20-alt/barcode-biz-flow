@@ -32,6 +32,16 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
   const [uploadStatus, setUploadStatus] = useState<{ file: string; status: 'success' | 'error'; message: string }[]>([]);
   const { toast } = useToast();
 
+  const convertDateFormat = (dateStr: string): string => {
+    // Convert DD-MM-YYYY to YYYY-MM-DD
+    const match = dateStr.match(/(\d{1,2})-(\d{1,2})-(\d{4})/);
+    if (match) {
+      const [, day, month, year] = match;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+    return dateStr;
+  };
+
   const extractTextFromPDF = async (file: File): Promise<string> => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -96,7 +106,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       return {
         orderId: orderId || `FLP-${Date.now()}`,
         invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-        invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
+        invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
         trackingId: trackingId || '',
         sku: sku || '',
         productName: productName || 'Unknown Product',
