@@ -7,8 +7,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import * as pdfjsLib from "pdfjs-dist";
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Configure PDF.js worker - use unpkg for better Vite compatibility
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 interface ParsedOrder {
   orderId: string;
@@ -49,40 +49,44 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
 
   const parseFlipkartOrder = (text: string, fileName: string): ParsedOrder | null => {
     try {
-      // Flipkart Order ID pattern - typically starts with OD followed by numbers
-      const orderIdMatch = text.match(/OD\d{15,}/i) || text.match(/Order\s*ID[:\s]+([A-Z0-9]+)/i);
-      const orderId = orderIdMatch ? orderIdMatch[0] : '';
+      // Flipkart Order ID pattern - OD followed by numbers
+      const orderIdMatch = text.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || text.match(/OD\d{15,}/i);
+      const orderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[0]) : '';
 
-      // Invoice Number pattern
-      const invoiceMatch = text.match(/Invoice\s*(?:No|Number)[:\s]+([A-Z0-9\-\/]+)/i);
+      // Invoice Number pattern - FATTN followed by numbers
+      const invoiceMatch = text.match(/Invoice\s*No[:\s]+([A-Z0-9]+)/i);
       const invoiceNumber = invoiceMatch ? invoiceMatch[1] : '';
 
-      // Invoice Date pattern
-      const dateMatch = text.match(/Invoice\s*Date[:\s]+(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})/i);
+      // Invoice Date pattern - DD-MM-YYYY format
+      const dateMatch = text.match(/Invoice\s*Date[:\s]+(\d{1,2}-\d{1,2}-\d{4})/i);
       const invoiceDate = dateMatch ? dateMatch[1] : '';
 
-      // Tracking/AWB Number pattern
-      const trackingMatch = text.match(/(?:AWB|Tracking)[:\s]+([A-Z0-9]+)/i) || text.match(/\d{10,}/);
-      const trackingId = trackingMatch ? trackingMatch[0] : '';
+      // AWB Number pattern - typically FMPC followed by numbers
+      const trackingMatch = text.match(/AWB\s*No\.?\s*\(N\)[:\s]+([A-Z0-9]+)/i) || 
+                           text.match(/AWB[:\s]+([A-Z0-9]+)/i);
+      const trackingId = trackingMatch ? trackingMatch[1] : '';
 
-      // SKU pattern - varies by marketplace
-      const skuMatch = text.match(/SKU[:\s]+([A-Z0-9\-]+)/i) || text.match(/FSN[A-Z0-9]+/i);
-      const sku = skuMatch ? (skuMatch[1] || skuMatch[0]) : '';
+      // SKU ID pattern - from the table
+      const skuMatch = text.match(/SKU\s*ID[:\s]+([A-Z0-9\-]+)/i);
+      const sku = skuMatch ? skuMatch[1] : '';
 
-      // Product Name - extract from common patterns
-      const productMatch = text.match(/Product[:\s]+(.+?)(?:Qty|Quantity|Price)/i);
-      const productName = productMatch ? productMatch[1].trim() : '';
+      // Product Name - description from SKU table
+      const productMatch = text.match(/SKU\s*ID.*?Description\s+QTY\s+([A-Z0-9\-]+)\s+(.+?)\s+\d+/is) ||
+                          text.match(/Description\s+(.+?)(?:\s+Qty|\s+HSN)/is);
+      const productName = productMatch ? (productMatch[2] || productMatch[1]).trim() : '';
 
-      // Quantity pattern
-      const qtyMatch = text.match(/(?:Qty|Quantity)[:\s]+(\d+)/i);
+      // Quantity - TOTAL QTY line is most reliable
+      const qtyMatch = text.match(/TOTAL\s*QTY[:\s]+(\d+)/i) || 
+                      text.match(/QTY[:\s]+(\d+)/i);
       const quantity = qtyMatch ? parseInt(qtyMatch[1]) : 1;
 
-      // Amount pattern
-      const amountMatch = text.match(/(?:Total|Amount|Price)[:\s]+(?:Rs\.?|₹)\s*(\d+(?:\.\d{2})?)/i);
+      // Amount - TOTAL PRICE is most reliable
+      const amountMatch = text.match(/TOTAL\s*PRICE[:\s]+(\d+(?:\.\d{2})?)/i) ||
+                         text.match(/Total\s+(\d+\.\d{2})/i);
       const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
 
-      // Payment type
-      const paymentType = text.match(/COD|Cash on Delivery/i) ? 'COD' : 'Prepaid';
+      // Payment type - check for COD keywords
+      const paymentType = text.match(/COD|Cash\s+on\s+Delivery/i) ? 'COD' : 'Prepaid';
 
       if (!orderId && !trackingId && !invoiceNumber) {
         console.warn(`Could not extract essential data from ${fileName}`);
