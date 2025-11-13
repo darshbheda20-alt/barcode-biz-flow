@@ -4,8 +4,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Package, Download } from "lucide-react";
+import { Loader2, Package, Download, Calendar, History } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
 
 interface PicklistItem {
   masterSku: string;
@@ -18,6 +22,8 @@ interface PicklistItem {
 export const PicklistView = () => {
   const [picklist, setPicklist] = useState<PicklistItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [historicalDate, setHistoricalDate] = useState<Date | undefined>(undefined);
+  const [viewingHistorical, setViewingHistorical] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -79,11 +85,67 @@ export const PicklistView = () => {
       }, {} as Record<string, PicklistItem>);
 
       setPicklist(Object.values(grouped));
+      setViewingHistorical(false);
     } catch (error) {
       console.error('Error fetching picklist:', error);
       toast({
         title: "Error",
         description: "Failed to fetch picklist",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchHistoricalPicklist = async (date: Date) => {
+    try {
+      setLoading(true);
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const { data, error } = await supabase
+        .from('process_orders')
+        .select('*')
+        .eq('workflow_status', 'archived')
+        .gte('exported_at', startOfDay.toISOString())
+        .lte('exported_at', endOfDay.toISOString())
+        .order('master_sku');
+
+      if (error) throw error;
+
+      // Group by master SKU
+      const grouped = (data || []).reduce((acc, order) => {
+        const key = order.master_sku || `unmapped_${order.marketplace_sku || order.id}`;
+        const displaySku = order.master_sku || 'Unmapped SKU';
+        
+        if (!acc[key]) {
+          acc[key] = {
+            masterSku: displaySku,
+            productName: order.product_name || 'Unknown Product',
+            totalQuantity: 0,
+            orderIds: [],
+            platform: order.platform
+          };
+        }
+        
+        if (!acc[key].orderIds.includes(order.order_id)) {
+          acc[key].totalQuantity += order.quantity;
+          acc[key].orderIds.push(order.order_id);
+        }
+        return acc;
+      }, {} as Record<string, PicklistItem>);
+
+      setPicklist(Object.values(grouped));
+      setViewingHistorical(true);
+    } catch (error) {
+      console.error('Error fetching historical picklist:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch historical picklist",
         variant: "destructive"
       });
     } finally {
@@ -117,7 +179,7 @@ export const PicklistView = () => {
     }
   };
 
-  const handleExportPicklist = () => {
+  const handleExportPicklist = async () => {
     if (picklist.length === 0) return;
 
     const csvContent = [
@@ -135,16 +197,49 @@ export const PicklistView = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `picklist-${new Date().toISOString().split('T')[0]}.csv`;
+    const fileName = viewingHistorical && historicalDate
+      ? `picklist-${format(historicalDate, 'yyyy-MM-dd')}.csv`
+      : `picklist-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
 
-    toast({
-      title: "Success",
-      description: "Picklist exported successfully"
-    });
+    // Archive current picklist orders (not for historical views)
+    if (!viewingHistorical) {
+      try {
+        const { error } = await supabase
+          .from('process_orders')
+          .update({ 
+            workflow_status: 'archived',
+            exported_at: new Date().toISOString()
+          })
+          .in('workflow_status', ['pending', 'picklist_generated']);
+
+        if (error) throw error;
+
+        // Clear the current view
+        setPicklist([]);
+        
+        toast({
+          title: "Success",
+          description: "Picklist exported and archived"
+        });
+      } catch (error) {
+        console.error('Error archiving picklist:', error);
+        toast({
+          title: "Warning",
+          description: "Picklist exported but failed to archive",
+          variant: "destructive"
+        });
+      }
+    } else {
+      toast({
+        title: "Success",
+        description: "Historical picklist downloaded"
+      });
+    }
   };
 
   if (loading) {
@@ -163,22 +258,64 @@ export const PicklistView = () => {
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="text-lg flex items-center gap-2">
-              <Package className="h-5 w-5" />
-              Generated Picklist
+              {viewingHistorical ? <History className="h-5 w-5" /> : <Package className="h-5 w-5" />}
+              {viewingHistorical ? 'Historical Picklist' : 'Generated Picklist'}
             </CardTitle>
             <CardDescription>
-              Grouped by Master SKU - {picklist.length} unique SKUs
+              {viewingHistorical && historicalDate 
+                ? `Viewing picklist from ${format(historicalDate, 'PPP')} - ${picklist.length} unique SKUs`
+                : `Grouped by Master SKU - ${picklist.length} unique SKUs`
+              }
             </CardDescription>
           </div>
           <div className="flex gap-2">
-            <Button
-              onClick={handleGeneratePicklist}
-              variant="outline"
-              size="sm"
-              disabled={picklist.length === 0}
-            >
-              Regenerate
-            </Button>
+            {viewingHistorical && (
+              <Button
+                onClick={() => {
+                  setHistoricalDate(undefined);
+                  fetchPicklist();
+                }}
+                variant="outline"
+                size="sm"
+              >
+                Back to Current
+              </Button>
+            )}
+            {!viewingHistorical && (
+              <>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <Calendar className="h-4 w-4 mr-2" />
+                      View Past
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="end">
+                    <CalendarComponent
+                      mode="single"
+                      selected={historicalDate}
+                      onSelect={(date) => {
+                        if (date) {
+                          setHistoricalDate(date);
+                          fetchHistoricalPicklist(date);
+                        }
+                      }}
+                      initialFocus
+                      className={cn("p-3 pointer-events-auto")}
+                      disabled={(date) => date > new Date()}
+                    />
+                  </PopoverContent>
+                </Popover>
+                <Button
+                  onClick={handleGeneratePicklist}
+                  variant="outline"
+                  size="sm"
+                  disabled={picklist.length === 0}
+                >
+                  Regenerate
+                </Button>
+              </>
+            )}
             <Button
               onClick={handleExportPicklist}
               variant="outline"
