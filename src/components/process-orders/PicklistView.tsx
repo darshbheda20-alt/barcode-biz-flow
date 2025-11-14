@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Package, Download, Calendar, History } from "lucide-react";
+import { Loader2, Package, Download, Calendar, History, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
@@ -193,6 +193,34 @@ export const PicklistView = () => {
     }
   };
 
+  const handleClearPicklist = async () => {
+    try {
+      const { error } = await supabase
+        .from('process_orders')
+        .update({ 
+          workflow_status: 'archived',
+          exported_at: new Date().toISOString()
+        })
+        .in('workflow_status', ['pending', 'picklist_generated']);
+
+      if (error) throw error;
+
+      setPicklist([]);
+      
+      toast({
+        title: "Success",
+        description: "Picklist cleared and archived"
+      });
+    } catch (error) {
+      console.error('Error clearing picklist:', error);
+      toast({
+        title: "Error",
+        description: "Failed to clear picklist",
+        variant: "destructive"
+      });
+    }
+  };
+
   const handleExportPicklist = async () => {
     if (picklist.length === 0) return;
 
@@ -328,6 +356,15 @@ export const PicklistView = () => {
                 >
                   Regenerate
                 </Button>
+                <Button
+                  onClick={handleClearPicklist}
+                  variant="outline"
+                  size="sm"
+                  disabled={picklist.length === 0}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Clear Picklist
+                </Button>
               </>
             )}
             <Button
@@ -354,6 +391,7 @@ export const PicklistView = () => {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {viewingHistorical && <TableHead className="w-16">S.No</TableHead>}
                   <TableHead>Master SKU</TableHead>
                   <TableHead>Product Name</TableHead>
                   <TableHead className="text-center">Total Qty</TableHead>
@@ -364,6 +402,11 @@ export const PicklistView = () => {
               <TableBody>
                 {picklist.map((item, idx) => (
                   <TableRow key={idx}>
+                    {viewingHistorical && (
+                      <TableCell className="font-medium text-muted-foreground">
+                        {idx + 1}
+                      </TableCell>
+                    )}
                     <TableCell className="font-mono font-semibold">
                       {item.masterSku}
                     </TableCell>
