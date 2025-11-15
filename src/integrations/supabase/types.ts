@@ -59,6 +59,7 @@ export type Database = {
         Row: {
           amount: number | null
           created_at: string
+          exported_at: string | null
           id: string
           invoice_date: string | null
           invoice_number: string | null
@@ -80,6 +81,7 @@ export type Database = {
         Insert: {
           amount?: number | null
           created_at?: string
+          exported_at?: string | null
           id?: string
           invoice_date?: string | null
           invoice_number?: string | null
@@ -101,6 +103,7 @@ export type Database = {
         Update: {
           amount?: number | null
           created_at?: string
+          exported_at?: string | null
           id?: string
           invoice_date?: string | null
           invoice_number?: string | null
