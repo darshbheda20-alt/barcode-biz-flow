@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ClipboardList, Printer, Package } from "lucide-react";
 import { FlipkartUpload } from "@/components/process-orders/FlipkartUpload";
 import { PicklistView } from "@/components/process-orders/PicklistView";
+import { UnmappedSKUs } from "@/components/process-orders/UnmappedSKUs";
 
 export default function ProcessOrders() {
   const [activeTab, setActiveTab] = useState("picklist");
@@ -77,7 +78,8 @@ export default function ProcessOrders() {
                 </Card>
               </div>
 
-              <div className="mt-6">
+              <div className="mt-6 space-y-6">
+                <UnmappedSKUs />
                 <PicklistView />
               </div>
             </CardContent>
