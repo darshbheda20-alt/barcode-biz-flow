@@ -2,11 +2,21 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Upload, FileText, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Upload, FileText, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { getUserFriendlyError } from "@/lib/errorHandling";
 import * as pdfjsLib from "pdfjs-dist";
+import {
+  extractTextWithPositions,
+  findASINs,
+  findSellerSKUs,
+  extractContextAroundIndex,
+  extractQuantity,
+  extractAmazonOrderId,
+  needsOCR,
+  type ParsedPage,
+} from "@/lib/pdfParser";
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -18,28 +28,11 @@ interface ParsedLine {
   qty: number;
   raw_line: string;
   product_name?: string;
-}
-
-interface ParsedPage {
-  page_number: number;
-  raw_text: string;
-  parsed_lines: ParsedLine[];
-}
-
-interface ParsedOrder {
-  orderId: string;
-  asin: string;
-  sellerSku: string;
-  productName: string;
-  quantity: number;
-  invoiceNumber?: string;
-  invoiceDate?: string;
-  trackingId?: string;
-  amount?: number;
+  source: 'pdf.js' | 'ocr';
 }
 
 interface AmazonUploadProps {
-  onOrdersParsed: (orders: ParsedOrder[]) => void;
+  onOrdersParsed: () => void;
 }
 
 export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
@@ -49,149 +42,132 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
   const [debugData, setDebugData] = useState<ParsedPage[] | null>(null);
   const { toast } = useToast();
 
-  const extractTextFromPDF = async (file: File): Promise<string[]> => {
+  const extractPagesFromPDF = async (file: File): Promise<ParsedPage[]> => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const pages: string[] = [];
+    const pages: ParsedPage[] = [];
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
-      pages.push(pageText);
+      const { raw_text, text_items } = await extractTextWithPositions(page);
+      
+      pages.push({
+        page_number: i,
+        raw_text,
+        text_items,
+        parsed_lines: []
+      });
     }
 
     return pages;
   };
 
   const detectPageType = (text: string): 'label' | 'invoice' | 'unknown' => {
-    // Invoice page indicators
     if (text.includes('Tax Invoice') || text.includes('Invoice Number') || text.includes('Sl. No')) {
       return 'invoice';
     }
-    // Label page indicators
     if (text.includes('AWB') || text.includes('BOX') || text.includes('Ship To:')) {
       return 'label';
     }
     return 'unknown';
   };
 
-  const parseAmazonLabelPage = (text: string, pageNumber: number): { order_id: string; awb: string; box_info: string } | null => {
-    // Extract Order ID
-    const orderIdMatch = text.match(/Order\s*(?:ID|Id)[:\s]*([\d\-]{15,})/i) || 
-                         text.match(/(\d{3}-\d{7}-\d{7})/);
-    const orderId = orderIdMatch ? orderIdMatch[1].trim() : '';
-
-    // Extract AWB
-    const awbMatch = text.match(/AWB[:\s]*([\d]+)/i);
-    const awb = awbMatch ? awbMatch[1].trim() : '';
-
-    // Extract BOX info
-    const boxMatch = text.match(/BOX\s*(\d+)\s*of\s*(\d+)/i);
-    const boxInfo = boxMatch ? `${boxMatch[1]}/${boxMatch[2]}` : '1/1';
-
-    if (!orderId) {
-      console.warn(`No order ID found on label page ${pageNumber}`);
-      return null;
-    }
-
-    console.log(`Label page ${pageNumber}: Order ${orderId}, AWB ${awb}, Box ${boxInfo}`);
-    return { order_id: orderId, awb, box_info: boxInfo };
-  };
-
-  const parseAmazonInvoicePage = (text: string, pageNumber: number): ParsedPage => {
-    console.log('=== PARSING AMAZON INVOICE PAGE ===');
-    console.log('Page:', pageNumber);
-
+  const parseAmazonInvoicePage = (parsedPage: ParsedPage): ParsedLine[] => {
+    const { raw_text, page_number } = parsedPage;
+    console.log(`=== PARSING AMAZON INVOICE PAGE ${page_number} ===`);
+    
     const parsedLines: ParsedLine[] = [];
-
-    // Extract Order ID (Amazon format: 123-1234567-1234567)
-    const orderIdMatch = text.match(/Order\s*(?:Number|ID)[:\s]*([\d\-]{15,})/i) ||
-                         text.match(/(\d{3}-\d{7}-\d{7})/);
-    const orderId = orderIdMatch ? orderIdMatch[1].trim() : '';
-
+    const orderId = extractAmazonOrderId(raw_text);
+    
     if (!orderId) {
-      console.warn(`No order ID found on invoice page ${pageNumber}`);
-      return { page_number: pageNumber, raw_text: text, parsed_lines: [] };
+      console.warn(`No order ID found on invoice page ${page_number}`);
+      return [];
     }
 
-    // Pattern: description | B0XXXXXXXX ( SELLER-SKU ) ...
-    const patternWithSellerSku = /(.+?)\s*\|\s*(B0[A-Z0-9]{8,})\s*\(\s*([^\)]+?)\s*\)/gi;
+    // Find all ASINs on the page
+    const asins = findASINs(raw_text);
+    console.log(`Found ${asins.length} ASINs on page ${page_number}:`, asins);
 
-    let match;
-    while ((match = patternWithSellerSku.exec(text)) !== null) {
-      const product_name = match[1].trim();
-      const asin = match[2].trim();
-      const seller_sku = match[3].trim();
+    // Find all seller SKUs
+    const skuMatches = findSellerSKUs(raw_text);
+    console.log(`Found ${skuMatches.length} seller SKU candidates`);
 
-      // Look ahead in the text after this match to find the quantity cell
-      const contextStart = match.index;
-      const contextEnd = Math.min(text.length, match.index + 120);
-      const context = text.substring(contextStart, contextEnd);
-      const qtyMatch = context.match(/\|\s*(\d+)\s*\|/);
-      const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
+    // For each ASIN, try to find its seller SKU and quantity
+    for (const asin of asins) {
+      const asinIndex = raw_text.indexOf(asin);
+      const context = extractContextAroundIndex(raw_text, asinIndex, 10, 10);
+      
+      // Find seller SKU in parentheses near this ASIN
+      let sellerSku = '';
+      for (const skuMatch of skuMatches) {
+        if (Math.abs(skuMatch.index - asinIndex) < 100) {
+          sellerSku = skuMatch.sku;
+          break;
+        }
+      }
+
+      if (!sellerSku) {
+        console.warn(`No seller SKU found for ASIN ${asin}, using ASIN as fallback`);
+        sellerSku = asin;
+      }
+
+      // Extract quantity from context
+      const qty = extractQuantity(context);
+
+      // Try to extract product name (text before ASIN)
+      const productNameMatch = context.match(/^(.+?)\s+B0[A-Z0-9]{8}/);
+      const productName = productNameMatch ? productNameMatch[1].trim() : '';
 
       parsedLines.push({
         order_id: orderId,
         asin,
-        seller_sku,
+        seller_sku: sellerSku,
         qty,
-        product_name,
-        raw_line: match[0]
+        raw_line: context,
+        product_name: productName,
+        source: 'pdf.js'
       });
 
-      console.log('Extracted product from invoice:', {
+      console.log('Extracted product:', {
         order_id: orderId,
         asin,
-        seller_sku,
+        seller_sku: sellerSku,
         qty,
-        product_name
+        product_name: productName
       });
     }
 
-    return {
-      page_number: pageNumber,
-      raw_text: text,
-      parsed_lines: parsedLines
-    };
+    return parsedLines;
   };
+
   const mapSKUToMasterSKU = async (sku: string): Promise<string | null> => {
     console.log('Attempting exact match for Amazon SKU:', sku);
 
-    // First, try to find in sku_aliases table (exact match only)
-    const { data: aliasData, error: aliasError } = await supabase
+    // Try sku_aliases table
+    const { data: aliasData } = await supabase
       .from('sku_aliases')
       .select('product_id, products(master_sku)')
-      .eq('marketplace', 'Amazon')
+      .eq('marketplace', 'amazon')
       .eq('alias_value', sku)
       .maybeSingle();
-
-    if (aliasError) {
-      console.error('Error querying sku_aliases:', aliasError);
-    }
 
     if (aliasData?.products) {
       console.log('Found exact match in aliases:', aliasData.products.master_sku);
       return aliasData.products.master_sku;
     }
 
-    // Second, try exact match in products table (master_sku or barcode)
-    const { data: productData, error: productError } = await supabase
+    // Try products table
+    const { data: productData } = await supabase
       .from('products')
       .select('master_sku, id')
       .or(`master_sku.eq.${sku},barcode.eq.${sku}`)
       .maybeSingle();
-
-    if (productError) {
-      console.error('Error querying products:', productError);
-    }
 
     if (productData) {
       console.log('Found exact match in products:', productData.master_sku);
       return productData.master_sku;
     }
 
-    // NO FUZZY MATCHING - return null if no exact match
     console.log('No exact match found for SKU:', sku);
     return null;
   };
@@ -222,43 +198,34 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
     const statuses: { file: string; status: 'success' | 'error'; message: string }[] = [];
 
     let totalOrdersProcessed = 0;
-    let totalFileDuplicates = 0;
-    let totalFilesSkipped = 0;
     let totalUnmappedSKUs = 0;
 
     for (const file of Array.from(files)) {
       try {
         console.log(`Processing file: ${file.name}`);
         
-        // Extract text from all pages
-        const pageTexts = await extractTextFromPDF(file);
+        // Extract pages with positional info
+        const pages = await extractPagesFromPDF(file);
         
-        // Classify pages and group by order
-        const labelPages: Array<{ page_number: number; order_id: string; awb: string; box_info: string }> = [];
-        const invoicePages: ParsedPage[] = [];
-
-        for (let i = 0; i < pageTexts.length; i++) {
-          const pageText = pageTexts[i];
-          const pageType = detectPageType(pageText);
+        // Parse invoice pages
+        for (const page of pages) {
+          const pageType = detectPageType(page.raw_text);
           
-          if (pageType === 'label') {
-            const labelData = parseAmazonLabelPage(pageText, i + 1);
-            if (labelData) {
-              labelPages.push({ page_number: i + 1, ...labelData });
+          if (pageType === 'invoice') {
+            // Check if OCR needed
+            if (needsOCR(page.raw_text)) {
+              console.log(`Page ${page.page_number} may need OCR - no ASIN/SKU candidates found`);
+              page.ocr_text = '(OCR would run here - placeholder)';
             }
-          } else if (pageType === 'invoice') {
-            const invoicePage = parseAmazonInvoicePage(pageText, i + 1);
-            if (invoicePage.parsed_lines.length > 0) {
-              invoicePages.push(invoicePage);
-              allParsedPages.push(invoicePage);
-            }
+            
+            const parsedLines = parseAmazonInvoicePage(page);
+            page.parsed_lines = parsedLines;
+            allParsedPages.push(page);
           }
         }
 
-        console.log(`Found ${labelPages.length} label pages and ${invoicePages.length} invoice pages`);
-
-        // Flatten all parsed lines from invoice pages
-        const allParsedLines = invoicePages.flatMap(page => page.parsed_lines);
+        // Collect all parsed lines
+        const allParsedLines = allParsedPages.flatMap(p => p.parsed_lines as ParsedLine[]);
 
         if (allParsedLines.length === 0) {
           statuses.push({
@@ -266,7 +233,6 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
             status: 'error',
             message: 'No valid products found in PDF'
           });
-          totalFilesSkipped++;
           continue;
         }
 
@@ -275,17 +241,14 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         console.log(`Uploaded to storage: ${uploadedFilePath}`);
 
         let fileNewOrderCount = 0;
-        let fileDuplicateCount = 0;
-        let fileSkippedCount = 0;
         let fileUnmappedCount = 0;
 
         // Process each parsed line
         for (const line of allParsedLines) {
           try {
-            // Map seller SKU to master SKU (exact match only)
+            // Map seller SKU to master SKU
             const masterSku = await mapSKUToMasterSKU(line.seller_sku);
             
-            // Get product_id if master SKU exists
             let productId = null;
             let isUnmapped = false;
             
@@ -298,7 +261,6 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
               
               productId = productData?.id || null;
             } else {
-              // SKU is unmapped - will be shown in UnmappedSKUs component
               isUnmapped = true;
               console.log(`Unmapped Amazon SKU detected: ${line.seller_sku} (Order: ${line.order_id})`);
             }
@@ -309,28 +271,22 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
               .select('id, workflow_status')
               .eq('order_id', line.order_id)
               .eq('marketplace_sku', line.seller_sku)
-              .eq('platform', 'Amazon')
+              .eq('platform', 'amazon')
               .maybeSingle();
 
-            if (existingOrder) {
-              if (existingOrder.workflow_status === 'archived') {
-                console.log(`Skipping archived order: ${line.order_id} - ${line.seller_sku}`);
-                fileDuplicateCount++;
-              } else {
-                console.log(`Duplicate order found (not archived): ${line.order_id}`);
-                fileSkippedCount++;
-              }
+            if (existingOrder && existingOrder.workflow_status !== 'archived') {
+              console.log(`Duplicate order found: ${line.order_id}`);
               continue;
             }
 
-            // Insert into process_orders
+            // Insert into process_orders - ALWAYS persist, even if unmapped
             const { error: insertError } = await supabase
               .from('process_orders')
               .insert({
-                platform: 'Amazon',
+                platform: 'amazon',
                 order_id: line.order_id,
                 marketplace_sku: line.seller_sku,
-                master_sku: masterSku || line.seller_sku, // Use seller SKU if unmapped
+                master_sku: masterSku,
                 product_id: productId,
                 product_name: line.product_name || '',
                 quantity: line.qty,
@@ -340,37 +296,27 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
 
             if (insertError) {
               console.error('Insert error:', insertError);
-              fileSkippedCount++;
             } else {
               fileNewOrderCount++;
+              totalOrdersProcessed++;
               if (isUnmapped) {
                 fileUnmappedCount++;
+                totalUnmappedSKUs++;
               }
             }
 
           } catch (lineError) {
             console.error(`Error processing line:`, lineError);
-            fileSkippedCount++;
           }
         }
 
-        totalOrdersProcessed += fileNewOrderCount;
-        totalFileDuplicates += fileDuplicateCount;
-        totalFilesSkipped += fileSkippedCount;
-        totalUnmappedSKUs += fileUnmappedCount;
-
-        // Determine status message
+        // Status message
         let statusMessage = '';
         if (fileNewOrderCount > 0) {
           statusMessage = `Processed ${fileNewOrderCount} order(s)`;
           if (fileUnmappedCount > 0) {
             statusMessage += ` (${fileUnmappedCount} unmapped SKU${fileUnmappedCount > 1 ? 's' : ''} require mapping)`;
           }
-          if (fileDuplicateCount > 0) {
-            statusMessage += `, ${fileDuplicateCount} duplicate(s) skipped`;
-          }
-        } else if (fileDuplicateCount > 0) {
-          statusMessage = `All ${fileDuplicateCount} order(s) were already processed and archived`;
         } else {
           statusMessage = 'No valid orders found';
         }
@@ -388,7 +334,6 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
           status: 'error',
           message: getUserFriendlyError(error)
         });
-        totalFilesSkipped++;
       }
     }
 
@@ -396,23 +341,17 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
     setDebugData(allParsedPages);
 
     // Trigger UI refresh
-    onOrdersParsed([]);
+    onOrdersParsed();
 
     // Show final toast
     if (totalOrdersProcessed > 0) {
       const description = totalUnmappedSKUs > 0
-        ? `${totalOrdersProcessed} order(s) processed across ${files.length} file(s). ${totalUnmappedSKUs} unmapped SKU${totalUnmappedSKUs > 1 ? 's' : ''} require${totalUnmappedSKUs === 1 ? 's' : ''} mapping below.`
-        : `${totalOrdersProcessed} order(s) processed across ${files.length} file(s)`;
+        ? `${totalOrdersProcessed} order(s) processed. ${totalUnmappedSKUs} unmapped SKU${totalUnmappedSKUs > 1 ? 's' : ''} require mapping below.`
+        : `${totalOrdersProcessed} order(s) processed from Amazon invoices`;
       
       toast({
         title: "Amazon orders uploaded successfully",
         description,
-      });
-    } else if (totalFileDuplicates > 0) {
-      toast({
-        title: "All orders already processed",
-        description: `All ${totalFileDuplicates} order(s) were already processed and archived. Use "View Past" to see them or "Clear Picklist" to reset.`,
-        variant: "destructive",
       });
     } else {
       toast({
@@ -444,7 +383,7 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
       <CardHeader>
         <CardTitle>Amazon Order Upload</CardTitle>
         <CardDescription>
-          Upload invoice PDFs from Amazon (labels or combined documents)
+          Upload invoice PDFs from Amazon (supports layout-agnostic parsing)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -476,14 +415,20 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         </div>
 
         {debugData && (
-          <Button 
-            onClick={downloadDebugJSON}
-            variant="outline"
-            size="sm"
-          >
-            <FileText className="mr-2 h-4 w-4" />
-            Download Debug JSON
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              onClick={downloadDebugJSON}
+              variant="outline"
+              size="sm"
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              Download Debug JSON
+            </Button>
+            <div className="flex-1 text-xs text-muted-foreground flex items-center gap-1">
+              <AlertCircle className="h-3 w-3" />
+              Debug JSON includes text_items, raw_text, and parsed_lines for QA
+            </div>
+          </div>
         )}
 
         {uploadStatus.length > 0 && (
