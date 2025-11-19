@@ -64,111 +64,89 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
     return pages;
   };
 
-  const parseAmazonPage = (text: string, pageNumber: number, fileName: string): ParsedPage => {
-    console.log('=== PARSING AMAZON PAGE ===');
-    console.log('File:', fileName);
+  const detectPageType = (text: string): 'label' | 'invoice' | 'unknown' => {
+    // Invoice page indicators
+    if (text.includes('Tax Invoice') || text.includes('Invoice Number') || text.includes('Sl. No')) {
+      return 'invoice';
+    }
+    // Label page indicators
+    if (text.includes('AWB') || text.includes('BOX') || text.includes('Ship To:')) {
+      return 'label';
+    }
+    return 'unknown';
+  };
+
+  const parseAmazonLabelPage = (text: string, pageNumber: number): { order_id: string; awb: string; box_info: string } | null => {
+    // Extract Order ID
+    const orderIdMatch = text.match(/Order\s*(?:ID|Id)[:\s]*([\d\-]{15,})/i) || 
+                         text.match(/(\d{3}-\d{7}-\d{7})/);
+    const orderId = orderIdMatch ? orderIdMatch[1].trim() : '';
+
+    // Extract AWB
+    const awbMatch = text.match(/AWB[:\s]*([\d]+)/i);
+    const awb = awbMatch ? awbMatch[1].trim() : '';
+
+    // Extract BOX info
+    const boxMatch = text.match(/BOX\s*(\d+)\s*of\s*(\d+)/i);
+    const boxInfo = boxMatch ? `${boxMatch[1]}/${boxMatch[2]}` : '1/1';
+
+    if (!orderId) {
+      console.warn(`No order ID found on label page ${pageNumber}`);
+      return null;
+    }
+
+    console.log(`Label page ${pageNumber}: Order ${orderId}, AWB ${awb}, Box ${boxInfo}`);
+    return { order_id: orderId, awb, box_info: boxInfo };
+  };
+
+  const parseAmazonInvoicePage = (text: string, pageNumber: number): ParsedPage => {
+    console.log('=== PARSING AMAZON INVOICE PAGE ===');
     console.log('Page:', pageNumber);
-    console.log('Text length:', text.length);
 
     const parsedLines: ParsedLine[] = [];
 
-    // Extract order ID (Amazon format: 123-1234567-1234567)
-    const orderIdMatch = text.match(/Order\s*(?:ID|#)[:\s]*([\d\-]{15,})/i) || 
+    // Extract Order ID
+    const orderIdMatch = text.match(/Order\s*(?:Number|ID)[:\s]*([\d\-]{15,})/i) || 
                          text.match(/(\d{3}-\d{7}-\d{7})/);
-    const orderId = orderIdMatch ? orderIdMatch[1] : '';
+    const orderId = orderIdMatch ? orderIdMatch[1].trim() : '';
 
     if (!orderId) {
-      console.warn(`No order ID found on page ${pageNumber}`);
+      console.warn(`No order ID found on invoice page ${pageNumber}`);
       return { page_number: pageNumber, raw_text: text, parsed_lines: [] };
     }
 
-    // Pattern 1: ASIN with seller SKU in parentheses
-    // Example: "| B0XXXXXXXX ( SELLER-SKU-123 )"
-    const pattern1 = /\|\s*(B0[A-Z0-9]{8,})\s*\(\s*([^\)]+?)\s*\)/gi;
-    
-    // Pattern 2: Description with ASIN and optional seller SKU
-    // Example: "Product Name | B0XXXXXXXX (SKU)"
-    const pattern2 = /(.+?)\s*\|\s*(B0[A-Z0-9]{8,})\s*(?:\(\s*([^\)]+?)\s*\))?/gi;
+    // Extract invoice number and date
+    const invoiceNumMatch = text.match(/Invoice\s*Number[:\s]*([^\s]+)/i);
+    const invoiceDateMatch = text.match(/Invoice\s*Date[:\s]*([^\s]+)/i);
 
-    // Pattern 3: Quantity followed by SKU/ASIN
-    // Example: "Qty: 1 SKU: ABC-123 | B0XXXXXXXX"
-    const qtyPattern = /Qty[:\s]*(\d+).*?(B0[A-Z0-9]{8,})\s*(?:\(\s*([^\)]+?)\s*\))?/gi;
+    // Pattern for product rows in invoice table
+    // Example: "| 1 | Product Name... | B0XXXXXXXX ( SELLER-SKU ) HSN:... | ₹612.86 | 1 | ..."
+    const productPattern = /\|\s*\d+\s*\|([^|]+)\|\s*(B0[A-Z0-9]{8,})\s*\(\s*([^\)]+?)\s*\)[^|]*\|[^|]*\|\s*(\d+)\s*\|/gi;
 
     let match;
+    while ((match = productPattern.exec(text)) !== null) {
+      const product_name = match[1].trim();
+      const asin = match[2].trim();
+      const seller_sku = match[3].trim();
+      const qty = parseInt(match[4]);
 
-    // Try pattern 1 (most specific)
-    const matches: Array<{ asin: string; seller_sku: string; qty: number; product_name: string; raw: string }> = [];
-    
-    while ((match = pattern1.exec(text)) !== null) {
-      const asin = match[1].trim();
-      const seller_sku = match[2].trim();
-      
-      // Find quantity near this match
-      const contextStart = Math.max(0, match.index - 200);
-      const contextEnd = Math.min(text.length, match.index + 200);
-      const context = text.substring(contextStart, contextEnd);
-      
-      const qtyMatch = context.match(/Qty[:\s]*(\d+)/i) || context.match(/Quantity[:\s]*(\d+)/i);
-      const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
-      
-      // Extract product name (text before the ASIN)
-      const productNameMatch = context.match(/([A-Za-z0-9\s\-]+?)\s*\|\s*B0/i);
-      const product_name = productNameMatch ? productNameMatch[1].trim() : '';
-
-      matches.push({
+      parsedLines.push({
+        order_id: orderId,
         asin,
         seller_sku,
         qty,
         product_name,
-        raw: match[0]
+        raw_line: match[0]
+      });
+
+      console.log('Extracted product from invoice:', {
+        order_id: orderId,
+        asin,
+        seller_sku,
+        qty,
+        product_name
       });
     }
-
-    // If no matches with pattern 1, try pattern 2
-    if (matches.length === 0) {
-      pattern2.lastIndex = 0;
-      while ((match = pattern2.exec(text)) !== null) {
-        const product_name = match[1].trim();
-        const asin = match[2].trim();
-        const seller_sku = match[3] ? match[3].trim() : asin; // Fallback to ASIN if no seller SKU
-
-        // Find quantity
-        const contextStart = Math.max(0, match.index - 100);
-        const contextEnd = Math.min(text.length, match.index + 100);
-        const context = text.substring(contextStart, contextEnd);
-        
-        const qtyMatch = context.match(/Qty[:\s]*(\d+)/i) || context.match(/Quantity[:\s]*(\d+)/i);
-        const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
-
-        matches.push({
-          asin,
-          seller_sku,
-          qty,
-          product_name,
-          raw: match[0]
-        });
-      }
-    }
-
-    // Convert matches to parsed lines
-    matches.forEach(m => {
-      parsedLines.push({
-        order_id: orderId,
-        asin: m.asin,
-        seller_sku: m.seller_sku,
-        qty: m.qty,
-        product_name: m.product_name,
-        raw_line: m.raw
-      });
-
-      console.log('Extracted product:', {
-        order_id: orderId,
-        asin: m.asin,
-        seller_sku: m.seller_sku,
-        qty: m.qty,
-        product_name: m.product_name
-      });
-    });
 
     return {
       page_number: pageNumber,
@@ -255,16 +233,32 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         // Extract text from all pages
         const pageTexts = await extractTextFromPDF(file);
         
-        // Parse each page
-        const fileParsedPages: ParsedPage[] = [];
+        // Classify pages and group by order
+        const labelPages: Array<{ page_number: number; order_id: string; awb: string; box_info: string }> = [];
+        const invoicePages: ParsedPage[] = [];
+
         for (let i = 0; i < pageTexts.length; i++) {
-          const parsedPage = parseAmazonPage(pageTexts[i], i + 1, file.name);
-          fileParsedPages.push(parsedPage);
-          allParsedPages.push(parsedPage);
+          const pageText = pageTexts[i];
+          const pageType = detectPageType(pageText);
+          
+          if (pageType === 'label') {
+            const labelData = parseAmazonLabelPage(pageText, i + 1);
+            if (labelData) {
+              labelPages.push({ page_number: i + 1, ...labelData });
+            }
+          } else if (pageType === 'invoice') {
+            const invoicePage = parseAmazonInvoicePage(pageText, i + 1);
+            if (invoicePage.parsed_lines.length > 0) {
+              invoicePages.push(invoicePage);
+              allParsedPages.push(invoicePage);
+            }
+          }
         }
 
-        // Flatten all parsed lines from all pages
-        const allParsedLines = fileParsedPages.flatMap(page => page.parsed_lines);
+        console.log(`Found ${labelPages.length} label pages and ${invoicePages.length} invoice pages`);
+
+        // Flatten all parsed lines from invoice pages
+        const allParsedLines = invoicePages.flatMap(page => page.parsed_lines);
 
         if (allParsedLines.length === 0) {
           statuses.push({

@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ClipboardList, Printer, Package } from "lucide-react";
 import { FlipkartUpload } from "@/components/process-orders/FlipkartUpload";
 import { AmazonUpload } from "@/components/process-orders/AmazonUpload";
+import { MyntraUpload } from "@/components/process-orders/MyntraUpload";
 import { PicklistView } from "@/components/process-orders/PicklistView";
 import { UnmappedSKUs } from "@/components/process-orders/UnmappedSKUs";
 
@@ -54,18 +55,7 @@ export default function ProcessOrders() {
                 <AmazonUpload onOrdersParsed={() => {}} />
 
                 {/* Myntra Section */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Myntra</CardTitle>
-                    <CardDescription>Upload Myntra Picklist CSV</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      Upload the picklist CSV exported from Myntra portal.
-                    </p>
-                    {/* File upload component will go here */}
-                  </CardContent>
-                </Card>
+                <MyntraUpload onOrdersParsed={() => {}} />
               </div>
 
               <div className="mt-6 space-y-6">
