@@ -102,6 +102,83 @@ export const groupIntoColumns = (items: TextItem[], xTolerance = 20): TextItem[]
 };
 
 /**
+ * Detect column headers and map column indices
+ */
+export const detectColumnHeaders = (
+  lines: TextItem[][],
+  headerKeywords: string[]
+): Map<string, number> => {
+  const columnMap = new Map<string, number>();
+  
+  // Find header row (first few lines that contain header keywords)
+  for (let lineIdx = 0; lineIdx < Math.min(5, lines.length); lineIdx++) {
+    const line = lines[lineIdx];
+    const lineText = line.map(item => item.str).join(' ').toLowerCase();
+    
+    // Check if this line contains header keywords
+    const hasHeaders = headerKeywords.some(keyword => 
+      lineText.includes(keyword.toLowerCase())
+    );
+    
+    if (hasHeaders) {
+      // Sort line items by x-coordinate to get column order
+      const sortedByX = [...line].sort((a, b) => a.x - b.x);
+      
+      // Map each header keyword to its column index
+      headerKeywords.forEach(keyword => {
+        const keywordLower = keyword.toLowerCase();
+        const columnIdx = sortedByX.findIndex(item => 
+          item.str.toLowerCase().includes(keywordLower) ||
+          lineText.includes(keywordLower)
+        );
+        
+        if (columnIdx >= 0) {
+          columnMap.set(keyword, sortedByX[columnIdx].x);
+        }
+      });
+      
+      break;
+    }
+  }
+  
+  return columnMap;
+};
+
+/**
+ * Extract column value from a line based on x-coordinate
+ */
+export const extractColumnValue = (
+  line: TextItem[],
+  targetX: number,
+  xTolerance = 30
+): string => {
+  const sortedByX = [...line].sort((a, b) => a.x - b.x);
+  
+  // Find items near the target x coordinate
+  const columnItems = sortedByX.filter(item => 
+    Math.abs(item.x - targetX) <= xTolerance
+  );
+  
+  if (columnItems.length > 0) {
+    return columnItems.map(item => item.str).join(' ').trim();
+  }
+  
+  // Fallback: find the closest item
+  let closest = sortedByX[0];
+  let minDist = Math.abs(sortedByX[0].x - targetX);
+  
+  for (const item of sortedByX) {
+    const dist = Math.abs(item.x - targetX);
+    if (dist < minDist) {
+      minDist = dist;
+      closest = item;
+    }
+  }
+  
+  return closest?.str.trim() || '';
+};
+
+/**
  * Find ASIN patterns in text
  */
 export const findASINs = (text: string): string[] => {
