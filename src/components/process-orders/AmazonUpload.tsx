@@ -105,8 +105,8 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
 
     const parsedLines: ParsedLine[] = [];
 
-    // Extract Order ID
-    const orderIdMatch = text.match(/Order\s*(?:Number|ID)[:\s]*([\d\-]{15,})/i) || 
+    // Extract Order ID (Amazon format: 123-1234567-1234567)
+    const orderIdMatch = text.match(/Order\s*(?:Number|ID)[:\s]*([\d\-]{15,})/i) ||
                          text.match(/(\d{3}-\d{7}-\d{7})/);
     const orderId = orderIdMatch ? orderIdMatch[1].trim() : '';
 
@@ -115,20 +115,21 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
       return { page_number: pageNumber, raw_text: text, parsed_lines: [] };
     }
 
-    // Extract invoice number and date
-    const invoiceNumMatch = text.match(/Invoice\s*Number[:\s]*([^\s]+)/i);
-    const invoiceDateMatch = text.match(/Invoice\s*Date[:\s]*([^\s]+)/i);
-
-    // Pattern for product rows in invoice table
-    // Example: "| 1 | Product Name... | B0XXXXXXXX ( SELLER-SKU ) HSN:... | ₹612.86 | 1 | ..."
-    const productPattern = /\|\s*\d+\s*\|([^|]+)\|\s*(B0[A-Z0-9]{8,})\s*\(\s*([^\)]+?)\s*\)[^|]*\|[^|]*\|\s*(\d+)\s*\|/gi;
+    // Pattern: description | B0XXXXXXXX ( SELLER-SKU ) ...
+    const patternWithSellerSku = /(.+?)\s*\|\s*(B0[A-Z0-9]{8,})\s*\(\s*([^\)]+?)\s*\)/gi;
 
     let match;
-    while ((match = productPattern.exec(text)) !== null) {
+    while ((match = patternWithSellerSku.exec(text)) !== null) {
       const product_name = match[1].trim();
       const asin = match[2].trim();
       const seller_sku = match[3].trim();
-      const qty = parseInt(match[4]);
+
+      // Look ahead in the text after this match to find the quantity cell
+      const contextStart = match.index;
+      const contextEnd = Math.min(text.length, match.index + 120);
+      const context = text.substring(contextStart, contextEnd);
+      const qtyMatch = context.match(/\|\s*(\d+)\s*\|/);
+      const qty = qtyMatch ? parseInt(qtyMatch[1]) : 1;
 
       parsedLines.push({
         order_id: orderId,
@@ -154,7 +155,6 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
       parsed_lines: parsedLines
     };
   };
-
   const mapSKUToMasterSKU = async (sku: string): Promise<string | null> => {
     console.log('Attempting exact match for Amazon SKU:', sku);
 
