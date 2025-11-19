@@ -12,7 +12,6 @@ import {
   groupIntoLines,
   extractQuantity,
   needsOCR,
-  detectColumnHeaders,
   extractColumnValue,
   type ParsedPage,
 } from "@/lib/pdfParser";
@@ -25,6 +24,7 @@ interface ParsedPicklistRow {
   seller_sku: string;
   product_description: string;
   quantity: number;
+  qty_source: 'column' | 'guessed' | 'label' | 'proximity' | 'ocr';
   raw_line: string;
   source: 'pdf.js' | 'ocr';
   page_number: number;
@@ -67,194 +67,181 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
   };
 
   const parseMyntraPicklistPage = (parsedPage: ParsedPage): ParsedPicklistRow[] => {
-    const { raw_text, text_items, page_number } = parsedPage;
+    const { text_items, page_number } = parsedPage;
     console.log(`=== PARSING MYNTRA PICKLIST PAGE ${page_number} ===`);
     
     const rows: ParsedPicklistRow[] = [];
 
-    // Strategy 1: If we have positional text, use column-based reconstruction
-    if (text_items && text_items.length > 0) {
-      console.log('Using positional text reconstruction with column detection');
-      
-      // Group into lines
-      const lines = groupIntoLines(text_items, 5);
-      console.log(`Grouped ${text_items.length} text items into ${lines.length} lines`);
-      
-      // Detect column headers for Myntra picklist
-      const headerKeywords = ['Myntra Sku Code', 'Seller Sku Code', 'Quantity', 'Product'];
-      const columnMap = detectColumnHeaders(lines, headerKeywords);
-      
-      console.log('Detected column headers:', {
-        myntra_x: columnMap.get('Myntra Sku Code'),
-        seller_x: columnMap.get('Seller Sku Code'),
-        qty_x: columnMap.get('Quantity')
-      });
-      
-      const myntraSkuX = columnMap.get('Myntra Sku Code');
-      const sellerSkuX = columnMap.get('Seller Sku Code');
-      const quantityX = columnMap.get('Quantity');
-      
-      if (!sellerSkuX) {
-        console.warn('Could not detect Seller Sku Code column - falling back to heuristics');
-      }
-      
-      // Parse each data row
-      for (const line of lines) {
-        if (line.length < 2) continue;
-        
-        const lineText = line.map(item => item.str).join(' ');
-        
-        // Skip header rows and empty rows
-        if (
-          lineText.toLowerCase().includes('myntra sku code') ||
-          lineText.toLowerCase().includes('seller sku code') ||
-          lineText.toLowerCase().includes('picklist type') ||
-          lineText.toLowerCase().includes('generated on') ||
-          lineText.toLowerCase().includes('total quantity') ||
-          lineText.trim().length < 5
-        ) {
-          continue;
-        }
-        
-        let myntraSku = '';
-        let sellerSku = '';
-        let productDescription = '';
-        let quantity = 1;
-        
-        // Extract values using detected column positions
-        if (myntraSkuX !== undefined) {
-          myntraSku = extractColumnValue(line, myntraSkuX, 30);
-        }
-        
-        if (sellerSkuX !== undefined) {
-          sellerSku = extractColumnValue(line, sellerSkuX, 30);
-        }
-        
-        if (quantityX !== undefined) {
-          const qtyText = extractColumnValue(line, quantityX, 30);
-          const qtyResult = extractQuantity(qtyText);
-          quantity = qtyResult.qty;
-        } else {
-          // Fallback: extract quantity from line
-          const qtyResult = extractQuantity(lineText);
-          quantity = qtyResult.qty;
-        }
-        
-        // Fallback if column detection failed
-        if (!sellerSku || !myntraSku) {
-          const sortedByX = [...line].sort((a, b) => a.x - b.x);
-          if (sortedByX.length >= 2) {
-            myntraSku = myntraSku || sortedByX[0]?.str.trim() || '';
-            sellerSku = sellerSku || sortedByX[1]?.str.trim() || '';
-          }
-        }
-        
-        // Extract product description (remaining text after SKUs)
-        const sortedByX = [...line].sort((a, b) => a.x - b.x);
-        const descItems = sortedByX.filter(item => {
-          const text = item.str.trim();
-          return (
-            text !== myntraSku &&
-            text !== sellerSku &&
-            text !== quantity.toString() &&
-            text !== 'N/A' &&
-            text.length > 2
-          );
-        });
-        productDescription = descItems.map(item => item.str).join(' ').trim();
-        
-        // Validate SKU patterns - Seller SKU must match pattern like LANGO-WM-TP2023-BLK-M
-        const sellerSkuPattern = /^[A-Z0-9\-]{6,}$/;
-        if (
-          myntraSku.length > 5 &&
-          sellerSku.length > 5 &&
-          sellerSkuPattern.test(sellerSku) &&
-          quantity > 0
-        ) {
-          rows.push({
-            myntra_sku: myntraSku,
-            seller_sku: sellerSku,
-            product_description: productDescription || lineText,
-            quantity,
-            raw_line: lineText,
-            source: 'pdf.js',
-            page_number,
-            column_indices: {
-              myntra_sku_x: myntraSkuX,
-              seller_sku_x: sellerSkuX,
-              quantity_x: quantityX
-            }
-          });
-          
-          console.log('Extracted Myntra product:', {
-            myntra_sku: myntraSku,
-            seller_sku: sellerSku,
-            quantity,
-            from_column_detection: !!sellerSkuX
-          });
-        } else {
-          console.warn('Skipping invalid row:', {
-            myntraSku,
-            sellerSku,
-            matched_pattern: sellerSkuPattern.test(sellerSku),
-            line: lineText.substring(0, 100)
-          });
-        }
-      }
+    const myntraDebug: any = {
+      headerRowIndex: -1,
+      headerText: '',
+      myntraSkuColumnIndex: null,
+      sellerSkuColumnIndex: null,
+      qtyColumnIndex: null,
+      columnXRanges: [] as Array<{ index: number; minX: number; maxX: number }>,
+    };
+
+    if (!text_items || text_items.length === 0) {
+      (parsedPage as any).myntra_debug = myntraDebug;
+      return rows;
     }
-    
-    // Strategy 2: Fallback to regex-based parsing if positional didn't work
-    if (rows.length === 0) {
-      console.log('Falling back to regex-based parsing');
-      
-      // More flexible pattern - match any line with SKU-like tokens and a number
-      const lines = raw_text.split('\n');
-      
-      for (const line of lines) {
-        // Skip headers
-        if (line.includes('Myntra') || line.includes('Code') || line.includes('Product')) {
-          continue;
-        }
-        
-        // Match patterns like: SKUABC123 LC-WM-RC-SKIN-L Product Description 5 N/A
-        const tokens = line.trim().split(/\s+/);
-        if (tokens.length < 4) continue;
-        
-        // First token is Myntra SKU
-        const myntraSku = tokens[0];
-        // Second token is Seller SKU
-        const sellerSku = tokens[1];
-        
-        // Find quantity (first number in tokens)
-        let quantity = 1;
-        let qtyIndex = -1;
-        for (let i = 2; i < tokens.length; i++) {
-          if (/^\d+$/.test(tokens[i])) {
-            quantity = parseInt(tokens[i]);
-            qtyIndex = i;
-            break;
-          }
-        }
-        
-        // Everything between seller SKU and quantity is description
-        const description = qtyIndex > 2 
-          ? tokens.slice(2, qtyIndex).join(' ') 
-          : tokens.slice(2, -1).join(' ');
-        
-        if (myntraSku.length > 3 && sellerSku.length > 3) {
-          rows.push({
-            myntra_sku: myntraSku,
-            seller_sku: sellerSku,
-            product_description: description,
-            quantity,
-            raw_line: line,
-            source: 'pdf.js',
-            page_number
-          });
-        }
+
+    // Group into logical rows by Y coordinate
+    const lines = groupIntoLines(text_items, 4);
+    console.log(`Grouped ${text_items.length} text items into ${lines.length} lines`);
+
+    // Detect header row: the first row containing a Seller SKU header variant
+    const sellerHeaderVariants = [
+      'seller sku code',
+      'seller sku',
+    ];
+
+    let headerRowIndex = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i].map((item) => item.str).join(' ').toLowerCase();
+      if (sellerHeaderVariants.some((variant) => text.includes(variant))) {
+        headerRowIndex = i;
+        myntraDebug.headerRowIndex = i;
+        myntraDebug.headerText = text;
+        break;
       }
     }
 
+    if (headerRowIndex === -1) {
+      console.warn('Myntra parser: no header row with Seller Sku column found');
+      (parsedPage as any).myntra_debug = myntraDebug;
+      return rows;
+    }
+
+    // Build header columns from the detected header row
+    const headerLine = [...lines[headerRowIndex]].sort((a, b) => a.x - b.x);
+    type HeaderCol = { index: number; x: number; text: string };
+    const headerCols: HeaderCol[] = headerLine.map((item, idx) => ({
+      index: idx,
+      x: item.x,
+      text: item.str.toLowerCase(),
+    }));
+
+    let myntraSkuColIdx: number | undefined;
+    let sellerSkuColIdx: number | undefined;
+    let qtyColIdx: number | undefined;
+
+    headerCols.forEach((col) => {
+      const t = col.text;
+      if (t.includes('myntra') && t.includes('sku')) {
+        if (myntraSkuColIdx === undefined) myntraSkuColIdx = col.index;
+      }
+      if (
+        t.includes('seller sku code') ||
+        t.includes('seller sku')
+      ) {
+        if (sellerSkuColIdx === undefined) sellerSkuColIdx = col.index;
+      }
+      if (t.includes('qty') || t.includes('quantity')) {
+        if (qtyColIdx === undefined) qtyColIdx = col.index;
+      }
+    });
+
+    myntraDebug.myntraSkuColumnIndex = myntraSkuColIdx ?? null;
+    myntraDebug.sellerSkuColumnIndex = sellerSkuColIdx ?? null;
+    myntraDebug.qtyColumnIndex = qtyColIdx ?? null;
+
+    // Compute simple column x-ranges for debug purposes
+    const headerColsSorted = [...headerCols].sort((a, b) => a.x - b.x);
+    const columnXRanges: Array<{ index: number; minX: number; maxX: number }> = [];
+    headerColsSorted.forEach((col, idx) => {
+      const prev = headerColsSorted[idx - 1];
+      const next = headerColsSorted[idx + 1];
+      const center = col.x;
+      const minX = prev ? (prev.x + center) / 2 : center - 20;
+      const maxX = next ? (next.x + center) / 2 : center + 20;
+      columnXRanges.push({ index: col.index, minX, maxX });
+    });
+    myntraDebug.columnXRanges = columnXRanges;
+
+    const getColX = (colIdx: number | undefined): number | undefined =>
+      colIdx !== undefined && colIdx >= 0 && colIdx < headerCols.length
+        ? headerCols[colIdx].x
+        : undefined;
+
+    const myntraSkuX = getColX(myntraSkuColIdx);
+    const sellerSkuX = getColX(sellerSkuColIdx);
+    const qtyX = getColX(qtyColIdx);
+
+    // Parse each data row strictly by columns
+    for (let i = headerRowIndex + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line || line.length === 0) continue;
+
+      const lineText = line.map((item) => item.str).join(' ').trim();
+      if (!lineText) continue;
+
+      let myntraSku = '';
+      let sellerSku = '';
+      let quantity = 1;
+      let qty_source: ParsedPicklistRow['qty_source'] = 'guessed';
+
+      if (myntraSkuX !== undefined) {
+        myntraSku = extractColumnValue(line, myntraSkuX, 20).trim();
+      }
+
+      if (sellerSkuX !== undefined) {
+        const rawSeller = extractColumnValue(line, sellerSkuX, 20).trim();
+        const sellerSkuPattern = /^[A-Z0-9\-]{6,}$/;
+        if (sellerSkuPattern.test(rawSeller)) {
+          sellerSku = rawSeller;
+        } else {
+          sellerSku = '';
+        }
+      }
+
+      if (qtyX !== undefined) {
+        const qtyText = extractColumnValue(line, qtyX, 20).trim();
+        const qtyResult = extractQuantity(qtyText);
+        if (Number.isFinite(qtyResult.qty) && qtyResult.qty > 0) {
+          quantity = qtyResult.qty;
+          qty_source = 'column';
+        } else {
+          quantity = 1;
+          qty_source = 'guessed';
+        }
+      } else {
+        quantity = 1;
+        qty_source = 'guessed';
+      }
+
+      // Build product description from remaining tokens (not used for SKU inference)
+      const sortedByX = [...line].sort((a, b) => a.x - b.x);
+      const descItems = sortedByX.filter((item) => {
+        const text = item.str.trim();
+        return (
+          text &&
+          text !== myntraSku &&
+          text !== sellerSku &&
+          text !== quantity.toString()
+        );
+      });
+      const productDescription = descItems.map((item) => item.str).join(' ').trim();
+
+      rows.push({
+        myntra_sku: myntraSku,
+        seller_sku: sellerSku,
+        product_description: productDescription || lineText,
+        quantity,
+        qty_source,
+        raw_line: lineText,
+        source: 'pdf.js',
+        page_number,
+        column_indices: {
+          myntra_sku_x: myntraSkuX,
+          seller_sku_x: sellerSkuX,
+          quantity_x: qtyX,
+        },
+      });
+    }
+
+    (parsedPage as any).myntra_debug = myntraDebug;
     return rows;
   };
 
