@@ -76,18 +76,26 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
                            text.match(/AWB[:\s]+([A-Z0-9]+)/i);
       const trackingId = trackingMatch ? trackingMatch[1] : '';
 
-      // SKU ID pattern - Multiple patterns to capture different formats
-      // Pattern 1: SKU ID: followed by SKU
-      // Pattern 2: SKU in table format
-      // Pattern 3: SKU on its own line
-      const skuMatch = text.match(/SKU\s*ID[:\s]+([A-Z0-9\-]+)/i) ||
-                       text.match(/SKU[:\s]+([A-Z0-9\-]+)/i) ||
-                       text.match(/\|\s*([A-Z]+-[A-Z]+-[A-Z0-9\-]+)\s*\|/i) ||
-                       text.match(/\b([A-Z]{4,}-[A-Z]{2,}-[A-Z0-9\-]{3,})\b/);
+      // SKU ID pattern - STRICT extraction for exact SKU
+      // Flipkart format: "SKU ID | Description   QTY  [number]  [SKU]  | [product name]"
+      // Extract the SKU that appears after QTY and before the pipe
+      const skuMatch = 
+        // Pattern 1: SKU after QTY number in table format (most reliable for Flipkart)
+        text.match(/QTY\s+\d+\s+([A-Z][A-Z0-9\-]+?)\s+\|/i) ||
+        // Pattern 2: SKU between pipes in table
+        text.match(/\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|/i) ||
+        // Pattern 3: Standalone SKU pattern (format: WORD-WORD-WORD)
+        text.match(/\b([A-Z]{4,}-[A-Z]{2,}-[A-Z0-9\-]{3,})\b/i) ||
+        // Pattern 4: After "SKU ID:" with colon
+        text.match(/SKU\s*ID\s*:\s*([A-Z][A-Z0-9\-]+)/i);
+      
       const sku = skuMatch ? skuMatch[1].trim() : '';
       
+      console.log('=== SKU EXTRACTION DEBUG ===');
       console.log('Extracted SKU:', sku);
-      console.log('Full text sample for debugging:', text.substring(0, 500));
+      console.log('Text sample:', text.substring(0, 600));
+      console.log('SKU Match Pattern:', skuMatch ? 'Pattern ' + (text.match(/QTY\s+\d+\s+([A-Z][A-Z0-9\-]+?)\s+\|/i) ? '1' : text.match(/\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|/i) ? '2' : text.match(/\b([A-Z]{4,}-[A-Z]{2,}-[A-Z0-9\-]{3,})\b/i) ? '3' : '4') : 'NONE');
+      console.log('===========================');
 
       // Product Name - description from SKU table
       const productMatch = text.match(/SKU\s*ID.*?Description\s+QTY\s+([A-Z0-9\-]+)\s+(.+?)\s+\d+/is) ||
@@ -132,16 +140,20 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
   const mapSKUToMasterSKU = async (marketplaceSku: string): Promise<{ productId: string; masterSku: string; productName: string } | null> => {
     if (!marketplaceSku) return null;
 
+    console.log('=== STRICT SKU MAPPING ===');
+    console.log('Looking for EXACT match for SKU:', marketplaceSku);
+
     try {
-      // First, try to find via sku_aliases
+      // STRICT MATCHING ONLY - First, try to find via sku_aliases with EXACT match
       const { data: aliasData, error: aliasError } = await supabase
         .from('sku_aliases')
         .select('product_id, products!inner(id, master_sku, name)')
         .eq('marketplace', 'flipkart')
         .or(`alias_value.eq.${marketplaceSku},marketplace_sku.eq.${marketplaceSku}`)
-        .single();
+        .maybeSingle();
 
       if (!aliasError && aliasData) {
+        console.log('✓ Found EXACT match in sku_aliases:', (aliasData.products as any).master_sku);
         return {
           productId: aliasData.product_id,
           masterSku: (aliasData.products as any).master_sku,
@@ -149,14 +161,16 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         };
       }
 
-      // If not found in aliases, try direct product lookup by barcode or master_sku
+      // STRICT MATCHING ONLY - Try direct product lookup with EXACT match on barcode or master_sku
+      // NO FUZZY MATCHING - removed ilike with wildcards
       const { data: productData, error: productError } = await supabase
         .from('products')
         .select('id, master_sku, name')
-        .or(`barcode.eq.${marketplaceSku},master_sku.ilike.%${marketplaceSku}%`)
-        .single();
+        .or(`barcode.eq.${marketplaceSku},master_sku.eq.${marketplaceSku}`)
+        .maybeSingle();
 
       if (!productError && productData) {
+        console.log('✓ Found EXACT match in products:', productData.master_sku);
         return {
           productId: productData.id,
           masterSku: productData.master_sku,
@@ -164,6 +178,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         };
       }
 
+      console.log('✗ NO EXACT MATCH FOUND - SKU must be mapped manually');
+      console.log('==========================');
       return null;
     } catch (error) {
       console.error('Error mapping SKU:', error);
@@ -247,14 +263,14 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
               continue;
             }
 
-            // Map to Master SKU
-            console.log(`Page ${pageNum + 1}: Attempting to map SKU:`, parsedOrder.sku);
+            // STRICT EXACT MATCH - Map to Master SKU
+            console.log(`Page ${pageNum + 1}: Attempting STRICT EXACT match for SKU:`, parsedOrder.sku);
             const mapping = await mapSKUToMasterSKU(parsedOrder.sku);
             
             if (!mapping) {
-              console.warn(`Could not map SKU: ${parsedOrder.sku} - Check sku_aliases table for Flipkart`);
+              console.warn(`⚠️  UNMAPPED SKU: "${parsedOrder.sku}" - No exact match found. This SKU must be mapped manually via the Unmapped SKUs section.`);
             } else {
-              console.log('Successfully mapped to Master SKU:', mapping.masterSku);
+              console.log('✓ Successfully mapped to Master SKU:', mapping.masterSku);
             }
 
             // Insert into database
