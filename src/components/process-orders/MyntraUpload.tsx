@@ -128,6 +128,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     let myntraSkuColIdx: number | undefined;
     let sellerSkuColIdx: number | undefined;
     let qtyColIdx: number | undefined;
+    let descriptionColIdx: number | undefined;
 
     headerCols.forEach((col) => {
       const t = col.text;
@@ -142,6 +143,9 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       }
       if (t.includes('qty') || t.includes('quantity')) {
         if (qtyColIdx === undefined) qtyColIdx = col.index;
+      }
+      if (t.includes('product') && t.includes('description')) {
+        if (descriptionColIdx === undefined) descriptionColIdx = col.index;
       }
     });
 
@@ -200,9 +204,13 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     const qtyColumnRange = columnXRanges.find(
       (c) => qtyColIdx !== undefined && c.index === qtyColIdx
     );
+    const descriptionColumnRange = columnXRanges.find(
+      (c) => descriptionColIdx !== undefined && c.index === descriptionColIdx
+    );
 
     (myntraDebug as any).sellerSkuColumnRange = sellerSkuColumnRange;
     (myntraDebug as any).qtyColumnRange = qtyColumnRange;
+    (myntraDebug as any).descriptionColumnRange = descriptionColumnRange;
 
     type TextItem = (typeof text_items)[number];
     const yTolerance = 2;
@@ -213,27 +221,59 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     ): TextItem[] => {
       if (!colRange) return [];
       const { rowTop, rowBottom } = getRowBounds(rowIndex);
+      const wrapTolerance = 14; // allow a bit of vertical wrapping below the row
+
+      const inColumn = (item: TextItem) =>
+        item.x >= colRange.minX && item.x <= colRange.maxX;
+
+      // Tokens within the main row band
       const rowItems = text_items.filter(
         (item) =>
-          item.y >= rowTop - yTolerance && item.y <= rowBottom + yTolerance
+          item.y >= rowTop - yTolerance &&
+          item.y <= rowBottom + yTolerance &&
+          inColumn(item)
       );
 
-      return rowItems
-        .filter(
-          (item) =>
-            item.x >= colRange.minX &&
-            item.x <= colRange.maxX
-        )
-        .sort((a, b) => (a.y === b.y ? a.x - b.x : a.y - b.y));
+      // Additional tokens slightly below the row (wrapped cell content)
+      const maxRowY = rowItems.reduce(
+        (max, item) => (item.y > max ? item.y : max),
+        rowBottom
+      );
+
+      const wrappedItems = text_items.filter(
+        (item) =>
+          inColumn(item) &&
+          item.y > rowBottom + yTolerance &&
+          item.y <= maxRowY + wrapTolerance
+      );
+
+      const all = [...rowItems, ...wrappedItems];
+
+      // Sort by visual reading order (top-to-bottom, then left-to-right)
+      return all.sort((a, b) =>
+        a.y === b.y ? a.x - b.x : a.y - b.y
+      );
     };
 
-    const assembleCellText = (tokens: TextItem[]): string => {
+    const assembleCodeCellText = (tokens: TextItem[]): string => {
       if (!tokens.length) return '';
-      const parts = tokens.map((t) => t.str);
-      let joined = parts.join(' ').replace(/\s+/g, ' ').trim();
-      // Remove common extraneous separators but preserve hyphens
-      joined = joined.replace(/[|,]+/g, '').trim();
-      return joined;
+      const raw = tokens
+        .map((t) => t.str ?? '')
+        .join('')
+        .replace(/\s+/g, '')
+        .replace(/[|,]+/g, '')
+        .trim();
+      return raw;
+    };
+
+    const assembleDescriptionCellText = (tokens: TextItem[]): string => {
+      if (!tokens.length) return '';
+      const raw = tokens
+        .map((t) => t.str ?? '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return raw;
     };
 
     // Parse each data row strictly by columns using assembled cells
@@ -249,23 +289,27 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       let quantity = 1;
       let qty_source: ParsedPicklistRow['qty_source'] = 'guessed';
 
+      // Myntra SKU (code-style cell)
       const myntraSkuTokens = buildCellTokens(i, myntraSkuColumnRange);
-      const myntraSkuText = assembleCellText(myntraSkuTokens);
+      const myntraSkuText = assembleCodeCellText(myntraSkuTokens);
       if (myntraSkuText) {
-        myntraSku = myntraSkuText;
+        myntraSku = myntraSkuText.toUpperCase();
       }
 
+      // Seller SKU from STRICT Seller Sku Code column only
       const sellerSkuTokens = buildCellTokens(i, sellerSkuColumnRange);
-      const sellerSkuAssembled = assembleCellText(sellerSkuTokens);
-      const sellerSkuPattern = /^[A-Z0-9\-]{6,}$/;
-      if (sellerSkuAssembled && sellerSkuPattern.test(sellerSkuAssembled)) {
-        sellerSku = sellerSkuAssembled;
+      const sellerSkuAssembledRaw = assembleCodeCellText(sellerSkuTokens);
+      const sellerSkuCandidate = sellerSkuAssembledRaw.toUpperCase();
+      const SELLER_SKU_RE = /^[A-Z0-9\-]{6,}$/;
+      if (sellerSkuCandidate && SELLER_SKU_RE.test(sellerSkuCandidate)) {
+        sellerSku = sellerSkuCandidate;
       } else {
         sellerSku = '';
       }
 
+      // Quantity from Qty/Quantity column only
       const qtyTokens = buildCellTokens(i, qtyColumnRange);
-      const qtyText = assembleCellText(qtyTokens);
+      const qtyText = assembleCodeCellText(qtyTokens);
       if (qtyText) {
         const match = qtyText.match(/\d+/);
         if (match) {
@@ -277,33 +321,14 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
         }
       }
 
-      const { rowTop, rowBottom } = getRowBounds(i);
-      const rowItems = text_items
-        .filter(
-          (item) =>
-            item.y >= rowTop - yTolerance &&
-            item.y <= rowBottom + yTolerance
-        )
-        .sort((a, b) => a.x - b.x);
-
-      const descItems = rowItems.filter((item) => {
-        const text = item.str.trim();
-        return (
-          text &&
-          text !== myntraSku &&
-          text !== sellerSku &&
-          text !== quantity.toString()
-        );
-      });
-      const productDescription = descItems
-        .map((item) => item.str)
-        .join(' ')
-        .trim();
+      // Product description strictly from Product Description column
+      const descTokens = buildCellTokens(i, descriptionColumnRange);
+      const productDescription = assembleDescriptionCellText(descTokens) || lineText;
 
       rows.push({
         myntra_sku: myntraSku,
         seller_sku: sellerSku,
-        product_description: productDescription || lineText,
+        product_description: productDescription,
         quantity,
         qty_source,
         raw_line: lineText,
@@ -319,7 +344,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
           x: t.x,
           y: t.y,
         })),
-        seller_sku_assembled: sellerSkuAssembled,
+        seller_sku_assembled: sellerSkuCandidate,
       });
     }
 
