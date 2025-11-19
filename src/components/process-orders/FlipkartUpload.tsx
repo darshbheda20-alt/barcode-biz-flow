@@ -57,83 +57,109 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     return pages;
   };
 
-  const parseFlipkartOrder = (text: string, fileName: string): ParsedOrder | null => {
+  const parseFlipkartPage = (text: string, fileName: string): ParsedOrder[] => {
     try {
-      // Flipkart Order ID pattern - OD followed by numbers
+      console.log('=== PARSING PAGE ===');
+      console.log('File:', fileName);
+      console.log('Text length:', text.length);
+      
+      // Extract order-level data (common to all products on this page)
       const orderIdMatch = text.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || text.match(/OD\d{15,}/i);
       const orderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[0]) : '';
 
-      // Invoice Number pattern - FATTN followed by numbers
       const invoiceMatch = text.match(/Invoice\s*No[:\s]+([A-Z0-9]+)/i);
       const invoiceNumber = invoiceMatch ? invoiceMatch[1] : '';
 
-      // Invoice Date pattern - DD-MM-YYYY format
       const dateMatch = text.match(/Invoice\s*Date[:\s]+(\d{1,2}-\d{1,2}-\d{4})/i);
       const invoiceDate = dateMatch ? dateMatch[1] : '';
 
-      // AWB Number pattern - typically FMPC followed by numbers
       const trackingMatch = text.match(/AWB\s*No\.?\s*\(N\)[:\s]+([A-Z0-9]+)/i) || 
                            text.match(/AWB[:\s]+([A-Z0-9]+)/i);
       const trackingId = trackingMatch ? trackingMatch[1] : '';
 
-      // SKU ID pattern - STRICT extraction for exact SKU
-      // Flipkart format: "SKU ID | Description   QTY  [number]  [SKU]  | [product name]"
-      // Extract the SKU that appears after QTY and before the pipe
-      const skuMatch = 
-        // Pattern 1: SKU after QTY number in table format (most reliable for Flipkart)
-        text.match(/QTY\s+\d+\s+([A-Z][A-Z0-9\-]+?)\s+\|/i) ||
-        // Pattern 2: SKU between pipes in table
-        text.match(/\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|/i) ||
-        // Pattern 3: Standalone SKU pattern (format: WORD-WORD-WORD)
-        text.match(/\b([A-Z]{4,}-[A-Z]{2,}-[A-Z0-9\-]{3,})\b/i) ||
-        // Pattern 4: After "SKU ID:" with colon
-        text.match(/SKU\s*ID\s*:\s*([A-Z][A-Z0-9\-]+)/i);
-      
-      const sku = skuMatch ? skuMatch[1].trim() : '';
-      
-      console.log('=== SKU EXTRACTION DEBUG ===');
-      console.log('Extracted SKU:', sku);
-      console.log('Text sample:', text.substring(0, 600));
-      console.log('SKU Match Pattern:', skuMatch ? 'Pattern ' + (text.match(/QTY\s+\d+\s+([A-Z][A-Z0-9\-]+?)\s+\|/i) ? '1' : text.match(/\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|/i) ? '2' : text.match(/\b([A-Z]{4,}-[A-Z]{2,}-[A-Z0-9\-]{3,})\b/i) ? '3' : '4') : 'NONE');
-      console.log('===========================');
-
-      // Product Name - description from SKU table
-      const productMatch = text.match(/SKU\s*ID.*?Description\s+QTY\s+([A-Z0-9\-]+)\s+(.+?)\s+\d+/is) ||
-                          text.match(/Description\s+(.+?)(?:\s+Qty|\s+HSN)/is);
-      const productName = productMatch ? (productMatch[2] || productMatch[1]).trim() : '';
-
-      // Quantity - TOTAL QTY line is most reliable
-      const qtyMatch = text.match(/TOTAL\s*QTY[:\s]+(\d+)/i) || 
-                      text.match(/QTY[:\s]+(\d+)/i);
-      const quantity = qtyMatch ? parseInt(qtyMatch[1]) : 1;
-
-      // Amount - TOTAL PRICE is most reliable
-      const amountMatch = text.match(/TOTAL\s*PRICE[:\s]+(\d+(?:\.\d{2})?)/i) ||
-                         text.match(/Total\s+(\d+\.\d{2})/i);
-      const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
-
-      // Payment type - check for COD keywords
       const paymentType = text.match(/COD|Cash\s+on\s+Delivery/i) ? 'COD' : 'Prepaid';
 
       if (!orderId && !trackingId && !invoiceNumber) {
-        console.warn(`Could not extract essential data from ${fileName}`);
-        return null;
+        console.warn(`Could not extract essential order data from ${fileName}`);
+        return [];
       }
 
-      return {
-        orderId: orderId || `FLP-${Date.now()}`,
-        invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-        invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
-        trackingId: trackingId || '',
-        sku: sku || '',
-        productName: productName || 'Unknown Product',
-        quantity,
-        amount,
-        paymentType
-      };
+      // Extract ALL product lines from the page using global regex
+      // Pattern: Find all SKUs in the format after "QTY [number] [SKU] |"
+      const productLines: ParsedOrder[] = [];
+      
+      // Find all lines that match the Flipkart product table format
+      // Pattern: "QTY [number] [SKU] | [product description]"
+      const qtySkuPattern = /QTY\s+(\d+)\s+([A-Z][A-Z0-9\-]+?)\s+\|\s*(.+?)(?=\s+HSN|$)/gi;
+      let match;
+      
+      while ((match = qtySkuPattern.exec(text)) !== null) {
+        const quantity = parseInt(match[1]);
+        const sku = match[2].trim();
+        const productName = match[3].trim().split(/\s{2,}/)[0]; // Take first part before multiple spaces
+        
+        console.log(`Found product line: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
+        
+        productLines.push({
+          orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
+          invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
+          invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
+          trackingId: trackingId || '',
+          sku: sku,
+          productName: productName || 'Unknown Product',
+          quantity: quantity || 1,
+          amount: 0, // Per-product amount not available in this format
+          paymentType
+        });
+      }
+
+      // Fallback: If no products found with main pattern, try alternative patterns
+      if (productLines.length === 0) {
+        console.log('No products found with primary pattern, trying fallback patterns...');
+        
+        // Pattern 2: SKU between pipes
+        const altPattern = /\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|/gi;
+        const skuMatches = [...text.matchAll(altPattern)];
+        
+        if (skuMatches.length > 0) {
+          console.log(`Found ${skuMatches.length} SKUs with fallback pattern`);
+          
+          skuMatches.forEach((skuMatch, idx) => {
+            const sku = skuMatch[1].trim();
+            
+            productLines.push({
+              orderId: orderId || `FLP-${Date.now()}-${idx}`,
+              invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
+              invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
+              trackingId: trackingId || '',
+              sku: sku,
+              productName: 'Unknown Product',
+              quantity: 1,
+              amount: 0,
+              paymentType
+            });
+          });
+        }
+      }
+
+      // If we found products, try to get the total amount for the order
+      if (productLines.length > 0) {
+        const amountMatch = text.match(/TOTAL\s*PRICE[:\s]+(\d+(?:\.\d{2})?)/i) ||
+                           text.match(/Total\s+(\d+\.\d{2})/i);
+        const totalAmount = amountMatch ? parseFloat(amountMatch[1]) : 0;
+        
+        // Distribute amount equally across products (or assign to first)
+        if (totalAmount > 0) {
+          productLines[0].amount = totalAmount;
+        }
+      }
+
+      console.log(`=== PARSE COMPLETE: Found ${productLines.length} product(s) ===`);
+      return productLines;
+      
     } catch (error) {
-      console.error('Error parsing order:', error);
-      return null;
+      console.error('Error parsing page:', error);
+      return [];
     }
   };
 
@@ -237,69 +263,77 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         // Upload file to storage once
         const storagePath = await uploadToStorage(file);
         
-        // Parse each page as a separate order
+        // Parse each page - each page may contain MULTIPLE products
         for (let pageNum = 0; pageNum < pages.length; pageNum++) {
           const pageText = pages[pageNum];
           
           try {
-            // Parse order details from this page
-            const parsedOrder = parseFlipkartOrder(pageText, `${file.name} (page ${pageNum + 1})`);
+            // Parse ALL product lines from this page
+            const parsedProducts = parseFlipkartPage(pageText, `${file.name} (page ${pageNum + 1})`);
             
-            if (!parsedOrder || !parsedOrder.invoiceNumber) {
-              console.log(`Page ${pageNum + 1} of ${file.name}: No valid order data found`);
+            if (parsedProducts.length === 0) {
+              console.log(`Page ${pageNum + 1} of ${file.name}: No valid product data found`);
               continue;
             }
 
-            // Check for duplicate invoice number
-            const { data: existingOrder } = await supabase
-              .from('process_orders')
-              .select('invoice_number')
-              .eq('invoice_number', parsedOrder.invoiceNumber)
-              .eq('platform', 'flipkart')
-              .maybeSingle();
+            console.log(`Page ${pageNum + 1}: Found ${parsedProducts.length} product(s)`);
 
-            if (existingOrder) {
-              console.log(`Page ${pageNum + 1}: Duplicate invoice ${parsedOrder.invoiceNumber}`);
-              continue;
+            // Process each product line separately
+            for (let prodIdx = 0; prodIdx < parsedProducts.length; prodIdx++) {
+              const parsedProduct = parsedProducts[prodIdx];
+              
+              // Check for duplicate invoice + SKU combination
+              const { data: existingOrder } = await supabase
+                .from('process_orders')
+                .select('invoice_number, marketplace_sku')
+                .eq('invoice_number', parsedProduct.invoiceNumber)
+                .eq('marketplace_sku', parsedProduct.sku)
+                .eq('platform', 'flipkart')
+                .maybeSingle();
+
+              if (existingOrder) {
+                console.log(`Page ${pageNum + 1}, Product ${prodIdx + 1}: Duplicate - Invoice ${parsedProduct.invoiceNumber} + SKU ${parsedProduct.sku}`);
+                continue;
+              }
+
+              // STRICT EXACT MATCH - Map to Master SKU
+              console.log(`Page ${pageNum + 1}, Product ${prodIdx + 1}: Attempting STRICT EXACT match for SKU:`, parsedProduct.sku);
+              const mapping = await mapSKUToMasterSKU(parsedProduct.sku);
+              
+              if (!mapping) {
+                console.warn(`⚠️  UNMAPPED SKU: "${parsedProduct.sku}" - No exact match found. This SKU must be mapped manually via the Unmapped SKUs section.`);
+              } else {
+                console.log('✓ Successfully mapped to Master SKU:', mapping.masterSku);
+              }
+
+              // Insert into database
+              const { error: insertError } = await supabase
+                .from('process_orders')
+                .insert({
+                  platform: 'flipkart',
+                  order_id: parsedProduct.orderId,
+                  invoice_number: parsedProduct.invoiceNumber,
+                  invoice_date: parsedProduct.invoiceDate,
+                  tracking_id: parsedProduct.trackingId,
+                  marketplace_sku: parsedProduct.sku,
+                  product_id: mapping?.productId || null,
+                  master_sku: mapping?.masterSku || parsedProduct.sku,
+                  product_name: mapping?.productName || parsedProduct.productName,
+                  quantity: parsedProduct.quantity,
+                  amount: parsedProduct.amount,
+                  payment_type: parsedProduct.paymentType,
+                  workflow_status: 'pending',
+                  uploaded_file_path: storagePath
+                });
+
+              if (insertError) {
+                console.error(`Insert error for page ${pageNum + 1}, product ${prodIdx + 1}:`, insertError);
+                continue;
+              }
+
+              allParsedOrders.push(parsedProduct);
+              fileOrderCount++;
             }
-
-            // STRICT EXACT MATCH - Map to Master SKU
-            console.log(`Page ${pageNum + 1}: Attempting STRICT EXACT match for SKU:`, parsedOrder.sku);
-            const mapping = await mapSKUToMasterSKU(parsedOrder.sku);
-            
-            if (!mapping) {
-              console.warn(`⚠️  UNMAPPED SKU: "${parsedOrder.sku}" - No exact match found. This SKU must be mapped manually via the Unmapped SKUs section.`);
-            } else {
-              console.log('✓ Successfully mapped to Master SKU:', mapping.masterSku);
-            }
-
-            // Insert into database
-            const { error: insertError } = await supabase
-              .from('process_orders')
-              .insert({
-                platform: 'flipkart',
-                order_id: parsedOrder.orderId,
-                invoice_number: parsedOrder.invoiceNumber,
-                invoice_date: parsedOrder.invoiceDate,
-                tracking_id: parsedOrder.trackingId,
-                marketplace_sku: parsedOrder.sku,
-                product_id: mapping?.productId || null,
-                master_sku: mapping?.masterSku || parsedOrder.sku,
-                product_name: mapping?.productName || parsedOrder.productName,
-                quantity: parsedOrder.quantity,
-                amount: parsedOrder.amount,
-                payment_type: parsedOrder.paymentType,
-                workflow_status: 'pending',
-                uploaded_file_path: storagePath
-              });
-
-            if (insertError) {
-              console.error(`Insert error for page ${pageNum + 1}:`, insertError);
-              continue;
-            }
-
-            allParsedOrders.push(parsedOrder);
-            fileOrderCount++;
             
           } catch (pageError) {
             console.error(`Error processing page ${pageNum + 1} of ${file.name}:`, pageError);
