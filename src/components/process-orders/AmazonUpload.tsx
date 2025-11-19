@@ -246,6 +246,7 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
     let totalOrdersProcessed = 0;
     let totalFileDuplicates = 0;
     let totalFilesSkipped = 0;
+    let totalUnmappedSKUs = 0;
 
     for (const file of Array.from(files)) {
       try {
@@ -282,6 +283,7 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         let fileNewOrderCount = 0;
         let fileDuplicateCount = 0;
         let fileSkippedCount = 0;
+        let fileUnmappedCount = 0;
 
         // Process each parsed line
         for (const line of allParsedLines) {
@@ -291,6 +293,8 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
             
             // Get product_id if master SKU exists
             let productId = null;
+            let isUnmapped = false;
+            
             if (masterSku) {
               const { data: productData } = await supabase
                 .from('products')
@@ -299,6 +303,10 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
                 .maybeSingle();
               
               productId = productData?.id || null;
+            } else {
+              // SKU is unmapped - will be shown in UnmappedSKUs component
+              isUnmapped = true;
+              console.log(`Unmapped Amazon SKU detected: ${line.seller_sku} (Order: ${line.order_id})`);
             }
 
             // Check for duplicates
@@ -341,6 +349,9 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
               fileSkippedCount++;
             } else {
               fileNewOrderCount++;
+              if (isUnmapped) {
+                fileUnmappedCount++;
+              }
             }
 
           } catch (lineError) {
@@ -352,11 +363,15 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         totalOrdersProcessed += fileNewOrderCount;
         totalFileDuplicates += fileDuplicateCount;
         totalFilesSkipped += fileSkippedCount;
+        totalUnmappedSKUs += fileUnmappedCount;
 
         // Determine status message
         let statusMessage = '';
         if (fileNewOrderCount > 0) {
           statusMessage = `Processed ${fileNewOrderCount} order(s)`;
+          if (fileUnmappedCount > 0) {
+            statusMessage += ` (${fileUnmappedCount} unmapped SKU${fileUnmappedCount > 1 ? 's' : ''} require mapping)`;
+          }
           if (fileDuplicateCount > 0) {
             statusMessage += `, ${fileDuplicateCount} duplicate(s) skipped`;
           }
@@ -391,9 +406,13 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
 
     // Show final toast
     if (totalOrdersProcessed > 0) {
+      const description = totalUnmappedSKUs > 0
+        ? `${totalOrdersProcessed} order(s) processed across ${files.length} file(s). ${totalUnmappedSKUs} unmapped SKU${totalUnmappedSKUs > 1 ? 's' : ''} require${totalUnmappedSKUs === 1 ? 's' : ''} mapping below.`
+        : `${totalOrdersProcessed} order(s) processed across ${files.length} file(s)`;
+      
       toast({
         title: "Amazon orders uploaded successfully",
-        description: `${totalOrdersProcessed} order(s) processed across ${files.length} file(s)`,
+        description,
       });
     } else if (totalFileDuplicates > 0) {
       toast({
