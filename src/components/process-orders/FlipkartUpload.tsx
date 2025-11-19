@@ -42,19 +42,19 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     return dateStr;
   };
 
-  const extractTextFromPDF = async (file: File): Promise<string> => {
+  const extractTextFromPDF = async (file: File): Promise<string[]> => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
+    const pages: string[] = [];
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map((item: any) => item.str).join(' ');
-      fullText += pageText + '\n';
+      pages.push(pageText);
     }
 
-    return fullText;
+    return pages;
   };
 
   const parseFlipkartOrder = (text: string, fileName: string): ParsedOrder | null => {
@@ -212,81 +212,97 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
+      let fileOrderCount = 0;
       
       try {
-        // Extract text from PDF
-        const text = await extractTextFromPDF(file);
+        // Extract text from each page separately
+        const pages = await extractTextFromPDF(file);
         
-        // Parse order details
-        const parsedOrder = parseFlipkartOrder(text, file.name);
-        
-        if (!parsedOrder) {
-          statusUpdates.push({
-            file: file.name,
-            status: 'error',
-            message: 'Could not extract order data'
-          });
-          continue;
-        }
-
-        // Check for duplicate invoice number
-        const { data: existingOrder } = await supabase
-          .from('process_orders')
-          .select('invoice_number')
-          .eq('invoice_number', parsedOrder.invoiceNumber)
-          .eq('platform', 'flipkart')
-          .maybeSingle();
-
-        if (existingOrder) {
-          statusUpdates.push({
-            file: file.name,
-            status: 'error',
-            message: 'Duplicate: Invoice already uploaded'
-          });
-          continue;
-        }
-
-        // Map to Master SKU
-        console.log('Attempting to map SKU:', parsedOrder.sku);
-        const mapping = await mapSKUToMasterSKU(parsedOrder.sku);
-        
-        if (!mapping) {
-          console.warn(`Could not map SKU: ${parsedOrder.sku} - Check sku_aliases table for Flipkart`);
-        } else {
-          console.log('Successfully mapped to Master SKU:', mapping.masterSku);
-        }
-        
-        // Upload file to storage
+        // Upload file to storage once
         const storagePath = await uploadToStorage(file);
+        
+        // Parse each page as a separate order
+        for (let pageNum = 0; pageNum < pages.length; pageNum++) {
+          const pageText = pages[pageNum];
+          
+          try {
+            // Parse order details from this page
+            const parsedOrder = parseFlipkartOrder(pageText, `${file.name} (page ${pageNum + 1})`);
+            
+            if (!parsedOrder || !parsedOrder.invoiceNumber) {
+              console.log(`Page ${pageNum + 1} of ${file.name}: No valid order data found`);
+              continue;
+            }
 
-        // Insert into database
-        const { error: insertError } = await supabase
-          .from('process_orders')
-          .insert({
-            platform: 'flipkart',
-            order_id: parsedOrder.orderId,
-            invoice_number: parsedOrder.invoiceNumber,
-            invoice_date: parsedOrder.invoiceDate,
-            tracking_id: parsedOrder.trackingId,
-            marketplace_sku: parsedOrder.sku,
-            product_id: mapping?.productId || null,
-            master_sku: mapping?.masterSku || parsedOrder.sku,
-            product_name: mapping?.productName || parsedOrder.productName,
-            quantity: parsedOrder.quantity,
-            amount: parsedOrder.amount,
-            payment_type: parsedOrder.paymentType,
-            workflow_status: 'pending',
-            uploaded_file_path: storagePath
+            // Check for duplicate invoice number
+            const { data: existingOrder } = await supabase
+              .from('process_orders')
+              .select('invoice_number')
+              .eq('invoice_number', parsedOrder.invoiceNumber)
+              .eq('platform', 'flipkart')
+              .maybeSingle();
+
+            if (existingOrder) {
+              console.log(`Page ${pageNum + 1}: Duplicate invoice ${parsedOrder.invoiceNumber}`);
+              continue;
+            }
+
+            // Map to Master SKU
+            console.log(`Page ${pageNum + 1}: Attempting to map SKU:`, parsedOrder.sku);
+            const mapping = await mapSKUToMasterSKU(parsedOrder.sku);
+            
+            if (!mapping) {
+              console.warn(`Could not map SKU: ${parsedOrder.sku} - Check sku_aliases table for Flipkart`);
+            } else {
+              console.log('Successfully mapped to Master SKU:', mapping.masterSku);
+            }
+
+            // Insert into database
+            const { error: insertError } = await supabase
+              .from('process_orders')
+              .insert({
+                platform: 'flipkart',
+                order_id: parsedOrder.orderId,
+                invoice_number: parsedOrder.invoiceNumber,
+                invoice_date: parsedOrder.invoiceDate,
+                tracking_id: parsedOrder.trackingId,
+                marketplace_sku: parsedOrder.sku,
+                product_id: mapping?.productId || null,
+                master_sku: mapping?.masterSku || parsedOrder.sku,
+                product_name: mapping?.productName || parsedOrder.productName,
+                quantity: parsedOrder.quantity,
+                amount: parsedOrder.amount,
+                payment_type: parsedOrder.paymentType,
+                workflow_status: 'pending',
+                uploaded_file_path: storagePath
+              });
+
+            if (insertError) {
+              console.error(`Insert error for page ${pageNum + 1}:`, insertError);
+              continue;
+            }
+
+            allParsedOrders.push(parsedOrder);
+            fileOrderCount++;
+            
+          } catch (pageError) {
+            console.error(`Error processing page ${pageNum + 1} of ${file.name}:`, pageError);
+          }
+        }
+
+        if (fileOrderCount > 0) {
+          statusUpdates.push({
+            file: file.name,
+            status: 'success',
+            message: `Processed ${fileOrderCount} order(s) from ${pages.length} page(s)`
           });
-
-        if (insertError) throw insertError;
-
-        allParsedOrders.push(parsedOrder);
-        statusUpdates.push({
-          file: file.name,
-          status: 'success',
-          message: mapping ? `Mapped to ${mapping.masterSku}` : 'Uploaded (SKU not mapped)'
-        });
+        } else {
+          statusUpdates.push({
+            file: file.name,
+            status: 'error',
+            message: 'No valid orders found in PDF'
+          });
+        }
 
       } catch (error) {
         console.error(`Error processing ${file.name}:`, error);
@@ -305,12 +321,12 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       onOrdersParsed(allParsedOrders);
       toast({
         title: "Upload Complete",
-        description: `Successfully processed ${allParsedOrders.length} of ${files.length} files`
+        description: `Successfully processed ${allParsedOrders.length} order(s) from ${files.length} file(s)`
       });
     } else {
       toast({
         title: "Upload Failed",
-        description: "Could not process any files",
+        description: "Could not process any orders",
         variant: "destructive"
       });
     }
