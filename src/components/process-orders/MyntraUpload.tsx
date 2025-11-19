@@ -116,41 +116,65 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       return rows;
     }
 
-    // Build column ranges using header keywords across all text items
-    type HeaderKey = 'myntra' | 'seller' | 'description' | 'qty';
-
-    interface HeaderColInfo {
-      key: HeaderKey;
+    // Build column ranges using header row text items and keywords
+    const headerLine = lines[headerRowIndex];
+    
+    type HeaderColInfo = {
+      key: 'myntra' | 'seller' | 'description' | 'qty';
       x: number;
-    }
+    };
 
     const headerHits: HeaderColInfo[] = [];
 
-    for (const item of text_items) {
-      const t = (item.str || '').toLowerCase();
-
-      if (t.includes('myntra') && t.includes('sku')) {
-        if (!headerHits.find((h) => h.key === 'myntra')) {
-          headerHits.push({ key: 'myntra', x: item.x });
-        }
+    // Search header row for column keywords
+    const headerText = headerLine.map(item => item.str).join(' ').toLowerCase();
+    
+    // Find Myntra Sku column
+    if (headerText.includes('myntra') && headerText.includes('sku')) {
+      const myntraItems = headerLine.filter(item => 
+        item.str.toLowerCase().includes('myntra') || 
+        item.str.toLowerCase().includes('sku') && item.x < 150
+      );
+      if (myntraItems.length > 0) {
+        const avgX = myntraItems.reduce((sum, item) => sum + item.x, 0) / myntraItems.length;
+        headerHits.push({ key: 'myntra', x: avgX });
       }
+    }
 
-      if (t.includes('seller') && t.includes('sku')) {
-        if (!headerHits.find((h) => h.key === 'seller')) {
-          headerHits.push({ key: 'seller', x: item.x });
-        }
+    // Find Seller Sku column
+    if (headerText.includes('seller') && headerText.includes('sku')) {
+      const sellerItems = headerLine.filter(item => 
+        item.str.toLowerCase().includes('seller') || 
+        (item.str.toLowerCase().includes('sku') && item.x > 150 && item.x < 250) ||
+        item.str.toLowerCase().includes('code') && item.x > 150 && item.x < 250
+      );
+      if (sellerItems.length > 0) {
+        const avgX = sellerItems.reduce((sum, item) => sum + item.x, 0) / sellerItems.length;
+        headerHits.push({ key: 'seller', x: avgX });
       }
+    }
 
-      if (t.includes('product') && t.includes('description')) {
-        if (!headerHits.find((h) => h.key === 'description')) {
-          headerHits.push({ key: 'description', x: item.x });
-        }
+    // Find Product Description column
+    if (headerText.includes('product') && headerText.includes('description')) {
+      const descItems = headerLine.filter(item => 
+        item.str.toLowerCase().includes('product') || 
+        item.str.toLowerCase().includes('description')
+      );
+      if (descItems.length > 0) {
+        const avgX = descItems.reduce((sum, item) => sum + item.x, 0) / descItems.length;
+        headerHits.push({ key: 'description', x: avgX });
       }
+    }
 
-      if (t.includes('qty') || t.includes('quantity')) {
-        if (!headerHits.find((h) => h.key === 'qty')) {
-          headerHits.push({ key: 'qty', x: item.x });
-        }
+    // Find Quantity column
+    if (headerText.includes('qty') || headerText.includes('quantity')) {
+      const qtyItems = headerLine.filter(item => 
+        item.str.toLowerCase().includes('qty') || 
+        item.str.toLowerCase().includes('quantity')
+      );
+      if (qtyItems.length > 0) {
+        const avgX = qtyItems.reduce((sum, item) => sum + item.x, 0) / qtyItems.length;
+        headerHits.push({ key: 'qty', x: avgX });
       }
     }
 
@@ -161,7 +185,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       index: number;
       minX: number;
       maxX: number;
-      key: HeaderKey;
+      key: 'myntra' | 'seller' | 'description' | 'qty';
     }
 
     const columnXRanges: ColumnRange[] = [];
@@ -179,7 +203,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       });
     });
 
-    const findIndexByKey = (key: HeaderKey) =>
+    const findIndexByKey = (key: 'myntra' | 'seller' | 'description' | 'qty') =>
       columnXRanges.find((c) => c.key === key)?.index;
 
     const myntraSkuColIdx = findIndexByKey('myntra');
