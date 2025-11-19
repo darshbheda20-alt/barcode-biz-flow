@@ -17,6 +17,7 @@ interface PicklistItem {
   totalQuantity: number;
   orderIds: string[];
   platform: string;
+  uploadedFiles: string[];
 }
 
 export const PicklistView = () => {
@@ -86,7 +87,8 @@ export const PicklistView = () => {
             productName: order.product_name || 'Unknown Product',
             totalQuantity: 0,
             orderIds: [],
-            platform: order.platform
+            platform: order.platform,
+            uploadedFiles: []
           };
         }
         
@@ -95,6 +97,15 @@ export const PicklistView = () => {
           acc[key].totalQuantity += order.quantity;
           acc[key].orderIds.push(order.order_id);
         }
+        
+        // Track unique uploaded files
+        if (order.uploaded_file_path) {
+          const fileName = order.uploaded_file_path.split('/').pop() || order.uploaded_file_path;
+          if (!acc[key].uploadedFiles.includes(fileName)) {
+            acc[key].uploadedFiles.push(fileName);
+          }
+        }
+        
         return acc;
       }, {} as Record<string, PicklistItem>);
 
@@ -142,7 +153,8 @@ export const PicklistView = () => {
             productName: order.product_name || 'Unknown Product',
             totalQuantity: 0,
             orderIds: [],
-            platform: order.platform
+            platform: order.platform,
+            uploadedFiles: []
           };
         }
         
@@ -150,6 +162,15 @@ export const PicklistView = () => {
           acc[key].totalQuantity += order.quantity;
           acc[key].orderIds.push(order.order_id);
         }
+        
+        // Track unique uploaded files
+        if (order.uploaded_file_path) {
+          const fileName = order.uploaded_file_path.split('/').pop() || order.uploaded_file_path;
+          if (!acc[key].uploadedFiles.includes(fileName)) {
+            acc[key].uploadedFiles.push(fileName);
+          }
+        }
+        
         return acc;
       }, {} as Record<string, PicklistItem>);
 
@@ -298,7 +319,7 @@ export const PicklistView = () => {
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <div>
+          <div className="space-y-2">
             <CardTitle className="text-lg flex items-center gap-2">
               {viewingHistorical ? <History className="h-5 w-5" /> : <Package className="h-5 w-5" />}
               {viewingHistorical ? 'Historical Picklist' : 'Generated Picklist'}
@@ -309,6 +330,15 @@ export const PicklistView = () => {
                 : `Grouped by Master SKU - ${picklist.length} unique SKUs`
               }
             </CardDescription>
+            {viewingHistorical && picklist.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {Array.from(new Set(picklist.flatMap(item => item.uploadedFiles))).map((fileName, idx) => (
+                  <Badge key={idx} variant="secondary" className="text-xs">
+                    📄 {fileName}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             {viewingHistorical && (
