@@ -255,6 +255,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       let fileOrderCount = 0;
+      let fileDuplicateCount = 0;
+      let fileSkippedCount = 0;
       
       try {
         // Extract text from each page separately
@@ -273,6 +275,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             
             if (parsedProducts.length === 0) {
               console.log(`Page ${pageNum + 1} of ${file.name}: No valid product data found`);
+              fileSkippedCount++;
               continue;
             }
 
@@ -293,6 +296,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
 
               if (existingOrder) {
                 console.log(`Page ${pageNum + 1}, Product ${prodIdx + 1}: Duplicate - Invoice ${parsedProduct.invoiceNumber} + SKU ${parsedProduct.sku}`);
+                fileDuplicateCount++;
                 continue;
               }
 
@@ -341,10 +345,17 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         }
 
         if (fileOrderCount > 0) {
+          const duplicateMsg = fileDuplicateCount > 0 ? ` (${fileDuplicateCount} duplicate(s) skipped)` : '';
           statusUpdates.push({
             file: file.name,
             status: 'success',
-            message: `Processed ${fileOrderCount} order(s) from ${pages.length} page(s)`
+            message: `Processed ${fileOrderCount} new order(s) from ${pages.length} page(s)${duplicateMsg}`
+          });
+        } else if (fileDuplicateCount > 0) {
+          statusUpdates.push({
+            file: file.name,
+            status: 'error',
+            message: `All ${fileDuplicateCount} order(s) were duplicates - already processed`
           });
         } else {
           statusUpdates.push({
@@ -367,16 +378,29 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     setUploadStatus(statusUpdates);
     setUploading(false);
 
+    const totalDuplicates = statusUpdates.reduce((sum, s) => {
+      const match = s.message.match(/(\d+) duplicate/);
+      return sum + (match ? parseInt(match[1]) : 0);
+    }, 0);
+
     if (allParsedOrders.length > 0) {
       onOrdersParsed(allParsedOrders);
       toast({
         title: "Upload Complete",
-        description: `Successfully processed ${allParsedOrders.length} order(s) from ${files.length} file(s)`
+        description: `Successfully processed ${allParsedOrders.length} new order(s) from ${files.length} file(s)${totalDuplicates > 0 ? ` (${totalDuplicates} duplicates skipped)` : ''}`
+      });
+    } else if (totalDuplicates > 0) {
+      // Even if no new orders, trigger refresh to show existing picklist
+      onOrdersParsed([]);
+      toast({
+        title: "All Orders Already Processed",
+        description: `${totalDuplicates} order(s) were already uploaded and archived. Use "View Past" to see historical picklists, or "Clear Picklist" to reprocess them.`,
+        variant: "default"
       });
     } else {
       toast({
         title: "Upload Failed",
-        description: "Could not process any orders",
+        description: "Could not process any orders from the PDF(s)",
         variant: "destructive"
       });
     }
