@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { AlertCircle, Link2, Loader2 } from "lucide-react";
+import { AlertCircle, Link2, Loader2, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +43,7 @@ export const UnmappedSKUs = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [mapping, setMapping] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [selectedSKU, setSelectedSKU] = useState<UnmappedSKU | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const { toast } = useToast();
@@ -173,6 +174,36 @@ export const UnmappedSKUs = () => {
     }
   };
 
+  const handleClearAll = async () => {
+    setClearing(true);
+    try {
+      // Delete all unmapped SKUs
+      const { error } = await supabase
+        .from('process_orders')
+        .delete()
+        .is('product_id', null)
+        .not('marketplace_sku', 'is', null);
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "All unmapped SKUs have been cleared"
+      });
+
+      fetchUnmappedSKUs();
+    } catch (error: any) {
+      console.error('Error clearing unmapped SKUs:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to clear unmapped SKUs",
+        variant: "destructive"
+      });
+    } finally {
+      setClearing(false);
+    }
+  };
+
   if (loading) {
     return (
       <Card>
@@ -199,6 +230,24 @@ export const UnmappedSKUs = () => {
                 {unmappedSKUs.length} SKU{unmappedSKUs.length !== 1 ? 's' : ''} need{unmappedSKUs.length === 1 ? 's' : ''} to be mapped to products
               </CardDescription>
             </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleClearAll}
+              disabled={clearing}
+            >
+              {clearing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Clearing...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Clear All
+                </>
+              )}
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
