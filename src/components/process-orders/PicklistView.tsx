@@ -18,6 +18,7 @@ interface PicklistItem {
   orderIds: string[];
   platform: string;
   uploadedFiles: string[];
+  fileTimestamps: Record<string, string>;
 }
 
 export const PicklistView = () => {
@@ -88,7 +89,8 @@ export const PicklistView = () => {
             totalQuantity: 0,
             orderIds: [],
             platform: order.platform,
-            uploadedFiles: []
+            uploadedFiles: [],
+            fileTimestamps: {}
           };
         }
         
@@ -98,11 +100,12 @@ export const PicklistView = () => {
           acc[key].orderIds.push(order.order_id);
         }
         
-        // Track unique uploaded files
+        // Track unique uploaded files with timestamps
         if (order.uploaded_file_path) {
           const fileName = order.uploaded_file_path.split('/').pop() || order.uploaded_file_path;
           if (!acc[key].uploadedFiles.includes(fileName)) {
             acc[key].uploadedFiles.push(fileName);
+            acc[key].fileTimestamps[fileName] = order.created_at;
           }
         }
         
@@ -154,7 +157,8 @@ export const PicklistView = () => {
             totalQuantity: 0,
             orderIds: [],
             platform: order.platform,
-            uploadedFiles: []
+            uploadedFiles: [],
+            fileTimestamps: {}
           };
         }
         
@@ -163,11 +167,12 @@ export const PicklistView = () => {
           acc[key].orderIds.push(order.order_id);
         }
         
-        // Track unique uploaded files
+        // Track unique uploaded files with timestamps
         if (order.uploaded_file_path) {
           const fileName = order.uploaded_file_path.split('/').pop() || order.uploaded_file_path;
           if (!acc[key].uploadedFiles.includes(fileName)) {
             acc[key].uploadedFiles.push(fileName);
+            acc[key].fileTimestamps[fileName] = order.created_at;
           }
         }
         
@@ -332,11 +337,20 @@ export const PicklistView = () => {
             </CardDescription>
             {viewingHistorical && picklist.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2">
-                {Array.from(new Set(picklist.flatMap(item => item.uploadedFiles))).map((fileName, idx) => (
-                  <Badge key={idx} variant="secondary" className="text-xs">
-                    📄 {fileName}
-                  </Badge>
-                ))}
+                {Array.from(new Set(picklist.flatMap(item => item.uploadedFiles))).map((fileName, idx) => {
+                  // Get timestamp from first item that has this file
+                  const timestamp = picklist.find(item => item.uploadedFiles.includes(fileName))?.fileTimestamps[fileName];
+                  return (
+                    <Badge key={idx} variant="secondary" className="text-xs">
+                      📄 {fileName}
+                      {timestamp && (
+                        <span className="ml-1 opacity-70">
+                          • {format(new Date(timestamp), 'h:mm a')}
+                        </span>
+                      )}
+                    </Badge>
+                  );
+                })}
               </div>
             )}
           </div>
