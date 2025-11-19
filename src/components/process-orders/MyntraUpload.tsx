@@ -97,15 +97,15 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
         // Last items contain quantity
         const lastItems = sortedByX.slice(-2);
         const qtyText = lastItems.map(item => item.str).join(' ');
-        const quantity = extractQuantity(qtyText);
+        const qtyResult = extractQuantity(qtyText);
         
         // Validate SKU patterns (should be alphanumeric with dashes)
-        if (myntraSku.length > 3 && sellerSku.length > 3 && quantity > 0) {
+        if (myntraSku.length > 3 && sellerSku.length > 3 && qtyResult.qty > 0) {
           rows.push({
             myntra_sku: myntraSku,
             seller_sku: sellerSku,
             product_description: productDescription || '',
-            quantity,
+            quantity: qtyResult.qty,
             raw_line: lineText,
             source: 'pdf.js'
           });
@@ -113,7 +113,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
           console.log('Extracted Myntra product:', {
             myntra_sku: myntraSku,
             seller_sku: sellerSku,
-            quantity
+            quantity: qtyResult.qty
           });
         }
       }

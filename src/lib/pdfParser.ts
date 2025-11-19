@@ -171,18 +171,141 @@ export const extractContextAroundIndex = (
   return words.slice(start, end).join(' ');
 };
 
+export interface QuantityResult {
+  qty: number;
+  source: 'label' | 'column' | 'proximity' | 'ocr' | 'guessed';
+  confidence: 'high' | 'medium' | 'low';
+}
+
 /**
- * Extract quantity from a text snippet
+ * Extract quantity from positional text items (preferred method)
  */
-export const extractQuantity = (text: string): number => {
-  // Pattern 1: Explicit "Qty: 5" or "Quantity: 5"
-  const explicitQtyPattern = /(?:Qty|Quantity)[:\s]*(\d+)/i;
-  const explicitMatch = text.match(explicitQtyPattern);
-  if (explicitMatch) {
-    return parseInt(explicitMatch[1]);
+export const extractQuantityFromItems = (
+  items: TextItem[],
+  targetY: number,
+  yTolerance = 5
+): QuantityResult => {
+  // Find items on the same line (same Y coordinate)
+  const lineItems = items.filter(item => Math.abs(item.y - targetY) <= yTolerance);
+  
+  // Pattern 1: Explicit Qty label on the same line
+  const qtyPatterns = [
+    /\bQty[:\s]*([0-9]+)\b/i,
+    /\bQuantity[:\s]*([0-9]+)\b/i,
+    /\b(\d+)\s+Unit\b/i
+  ];
+  
+  for (const item of lineItems) {
+    for (const pattern of qtyPatterns) {
+      const match = item.str.match(pattern);
+      if (match) {
+        return {
+          qty: parseInt(match[1]),
+          source: 'label',
+          confidence: 'high'
+        };
+      }
+    }
   }
   
-  // Pattern 2: Look for standalone small integers (1-99) near end of text
+  // Pattern 2: Column detection - find qty column by x clustering
+  // Group all numbers by their x position to find qty column
+  const numberItems = items
+    .filter(item => /^\d{1,2}$/.test(item.str.trim()))
+    .map(item => ({
+      ...item,
+      value: parseInt(item.str.trim())
+    }))
+    .filter(item => item.value > 0 && item.value < 100);
+  
+  if (numberItems.length > 0) {
+    // Cluster by x coordinate to find qty column
+    const xClusters = new Map<number, typeof numberItems>();
+    const xTolerance = 20;
+    
+    for (const numItem of numberItems) {
+      let foundCluster = false;
+      for (const [clusterX, cluster] of xClusters.entries()) {
+        if (Math.abs(numItem.x - clusterX) <= xTolerance) {
+          cluster.push(numItem);
+          foundCluster = true;
+          break;
+        }
+      }
+      if (!foundCluster) {
+        xClusters.set(numItem.x, [numItem]);
+      }
+    }
+    
+    // Find the cluster with most items (likely qty column)
+    let largestCluster: typeof numberItems = [];
+    let largestClusterX = 0;
+    for (const [clusterX, cluster] of xClusters.entries()) {
+      if (cluster.length > largestCluster.length) {
+        largestCluster = cluster;
+        largestClusterX = clusterX;
+      }
+    }
+    
+    // Find number in this column on target line
+    const qtyOnLine = largestCluster.find(item => 
+      Math.abs(item.y - targetY) <= yTolerance
+    );
+    
+    if (qtyOnLine) {
+      return {
+        qty: qtyOnLine.value,
+        source: 'column',
+        confidence: 'high'
+      };
+    }
+  }
+  
+  // Pattern 3: Fallback to proximity (last resort, low confidence)
+  const numbersOnLine = lineItems
+    .filter(item => /^\d{1,2}$/.test(item.str.trim()))
+    .map(item => parseInt(item.str.trim()))
+    .filter(num => num > 0 && num < 100);
+  
+  if (numbersOnLine.length > 0) {
+    return {
+      qty: numbersOnLine[numbersOnLine.length - 1],
+      source: 'proximity',
+      confidence: 'low'
+    };
+  }
+  
+  // Default: guess 1
+  return {
+    qty: 1,
+    source: 'guessed',
+    confidence: 'low'
+  };
+};
+
+/**
+ * Extract quantity from text (fallback when text_items not available)
+ */
+export const extractQuantity = (text: string): QuantityResult => {
+  // Pattern 1: Explicit "Qty: 5" or "Quantity: 5"
+  const qtyPatterns = [
+    /\bQty[:\s]*([0-9]+)\b/i,
+    /\bQuantity[:\s]*([0-9]+)\b/i,
+    /\b(\d+)\s+Unit\b/i
+  ];
+  
+  for (const pattern of qtyPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return {
+        qty: parseInt(match[1]),
+        source: 'label',
+        confidence: 'high'
+      };
+    }
+  }
+  
+  // Pattern 2: Look for standalone small integers (strict)
   const numbersPattern = /\b(\d{1,2})\b/g;
   const numbers: number[] = [];
   let match;
@@ -193,8 +316,21 @@ export const extractQuantity = (text: string): number => {
     }
   }
   
-  // Return the last small number found (likely to be quantity)
-  return numbers.length > 0 ? numbers[numbers.length - 1] : 1;
+  // Only use proximity if we have very few candidates
+  if (numbers.length === 1) {
+    return {
+      qty: numbers[0],
+      source: 'proximity',
+      confidence: 'medium'
+    };
+  }
+  
+  // Default: guess 1 and flag for review
+  return {
+    qty: 1,
+    source: 'guessed',
+    confidence: 'low'
+  };
 };
 
 /**

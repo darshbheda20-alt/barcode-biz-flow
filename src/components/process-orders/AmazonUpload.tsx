@@ -13,6 +13,7 @@ import {
   findSellerSKUs,
   extractContextAroundIndex,
   extractQuantity,
+  extractQuantityFromItems,
   extractAmazonOrderId,
   needsOCR,
   type ParsedPage,
@@ -26,6 +27,8 @@ interface ParsedLine {
   asin: string;
   seller_sku: string;
   qty: number;
+  qty_source: 'label' | 'column' | 'proximity' | 'ocr' | 'guessed';
+  qty_confidence: 'high' | 'medium' | 'low';
   raw_line: string;
   product_name?: string;
   source: 'pdf.js' | 'ocr';
@@ -73,7 +76,7 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
   };
 
   const parseAmazonInvoicePage = (parsedPage: ParsedPage): ParsedLine[] => {
-    const { raw_text, page_number } = parsedPage;
+    const { raw_text, text_items, page_number } = parsedPage;
     console.log(`=== PARSING AMAZON INVOICE PAGE ${page_number} ===`);
     
     const parsedLines: ParsedLine[] = [];
@@ -111,8 +114,22 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         sellerSku = asin;
       }
 
-      // Extract quantity from context
-      const qty = extractQuantity(context);
+      // Extract quantity using positional data if available
+      let qtyResult;
+      if (text_items && text_items.length > 0) {
+        // Find the ASIN item to get its Y position
+        const asinItem = text_items.find(item => item.str.includes(asin));
+        if (asinItem) {
+          qtyResult = extractQuantityFromItems(text_items, asinItem.y);
+          console.log(`Quantity extracted via text_items for ${asin}:`, qtyResult);
+        } else {
+          qtyResult = extractQuantity(context);
+          console.log(`Quantity extracted via text fallback for ${asin}:`, qtyResult);
+        }
+      } else {
+        qtyResult = extractQuantity(context);
+        console.log(`Quantity extracted via text fallback for ${asin}:`, qtyResult);
+      }
 
       // Try to extract product name (text before ASIN)
       const productNameMatch = context.match(/^(.+?)\s+B0[A-Z0-9]{8}/);
@@ -122,7 +139,9 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         order_id: orderId,
         asin,
         seller_sku: sellerSku,
-        qty,
+        qty: qtyResult.qty,
+        qty_source: qtyResult.source,
+        qty_confidence: qtyResult.confidence,
         raw_line: context,
         product_name: productName,
         source: 'pdf.js'
@@ -132,7 +151,9 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
         order_id: orderId,
         asin,
         seller_sku: sellerSku,
-        qty,
+        qty: qtyResult.qty,
+        qty_source: qtyResult.source,
+        qty_confidence: qtyResult.confidence,
         product_name: productName
       });
     }
@@ -242,6 +263,28 @@ export const AmazonUpload = ({ onOrdersParsed }: AmazonUploadProps) => {
 
         let fileNewOrderCount = 0;
         let fileUnmappedCount = 0;
+
+        // Verify aggregation: sum of all parsed_line.qty should be consistent
+        const totalParsedQty = allParsedLines.reduce((sum, line) => sum + line.qty, 0);
+        console.log(`Total quantity from parsed lines: ${totalParsedQty}`);
+        
+        // Log qty_source distribution for QA
+        const qtySourceCounts = allParsedLines.reduce((acc, line) => {
+          acc[line.qty_source] = (acc[line.qty_source] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        console.log('Quantity extraction sources:', qtySourceCounts);
+        
+        // Flag low-confidence quantities for review
+        const lowConfidenceLines = allParsedLines.filter(
+          line => line.qty_confidence === 'low'
+        );
+        if (lowConfidenceLines.length > 0) {
+          console.warn(
+            `${lowConfidenceLines.length} lines have low-confidence quantities and may need review:`,
+            lowConfidenceLines.map(l => ({ order_id: l.order_id, seller_sku: l.seller_sku, qty: l.qty, source: l.qty_source }))
+          );
+        }
 
         // Process each parsed line
         for (const line of allParsedLines) {
