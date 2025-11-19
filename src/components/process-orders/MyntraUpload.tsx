@@ -289,11 +289,19 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       let quantity = 1;
       let qty_source: ParsedPicklistRow['qty_source'] = 'guessed';
 
-      // Myntra SKU (code-style cell)
+      // Myntra SKU (code-style cell) – this anchors a logical data row.
       const myntraSkuTokens = buildCellTokens(i, myntraSkuColumnRange);
       const myntraSkuText = assembleCodeCellText(myntraSkuTokens);
       if (myntraSkuText) {
         myntraSku = myntraSkuText.toUpperCase();
+      }
+
+      // If we don't have a Myntra SKU on this visual line, it's most likely a
+      // wrapped continuation line for the Seller SKU column. In that case we
+      // skip creating a separate row; the continuation tokens are already
+      // captured by the previous row via buildCellTokens wrap logic.
+      if (!myntraSku) {
+        continue;
       }
 
       // Seller SKU from STRICT Seller Sku Code column only
