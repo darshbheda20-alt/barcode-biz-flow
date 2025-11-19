@@ -116,64 +116,85 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       return rows;
     }
 
-    // Build header columns from the detected header row
-    const headerLine = [...lines[headerRowIndex]].sort((a, b) => a.x - b.x);
-    type HeaderCol = { index: number; x: number; text: string };
-    const headerCols: HeaderCol[] = headerLine.map((item, idx) => ({
-      index: idx,
-      x: item.x,
-      text: item.str.toLowerCase(),
-    }));
+    // Build column ranges using header keywords across all text items
+    type HeaderKey = 'myntra' | 'seller' | 'description' | 'qty';
 
-    let myntraSkuColIdx: number | undefined;
-    let sellerSkuColIdx: number | undefined;
-    let qtyColIdx: number | undefined;
-    let descriptionColIdx: number | undefined;
+    interface HeaderColInfo {
+      key: HeaderKey;
+      x: number;
+    }
 
-    headerCols.forEach((col) => {
-      const t = col.text;
+    const headerHits: HeaderColInfo[] = [];
+
+    for (const item of text_items) {
+      const t = (item.str || '').toLowerCase();
+
       if (t.includes('myntra') && t.includes('sku')) {
-        if (myntraSkuColIdx === undefined) myntraSkuColIdx = col.index;
+        if (!headerHits.find((h) => h.key === 'myntra')) {
+          headerHits.push({ key: 'myntra', x: item.x });
+        }
       }
-      if (
-        t.includes('seller sku code') ||
-        t.includes('seller sku')
-      ) {
-        if (sellerSkuColIdx === undefined) sellerSkuColIdx = col.index;
+
+      if (t.includes('seller') && t.includes('sku')) {
+        if (!headerHits.find((h) => h.key === 'seller')) {
+          headerHits.push({ key: 'seller', x: item.x });
+        }
       }
-      if (t.includes('qty') || t.includes('quantity')) {
-        if (qtyColIdx === undefined) qtyColIdx = col.index;
-      }
+
       if (t.includes('product') && t.includes('description')) {
-        if (descriptionColIdx === undefined) descriptionColIdx = col.index;
+        if (!headerHits.find((h) => h.key === 'description')) {
+          headerHits.push({ key: 'description', x: item.x });
+        }
       }
+
+      if (t.includes('qty') || t.includes('quantity')) {
+        if (!headerHits.find((h) => h.key === 'qty')) {
+          headerHits.push({ key: 'qty', x: item.x });
+        }
+      }
+    }
+
+    // Sort header hits left-to-right and derive x ranges
+    const sortedHits = [...headerHits].sort((a, b) => a.x - b.x);
+
+    interface ColumnRange {
+      index: number;
+      minX: number;
+      maxX: number;
+      key: HeaderKey;
+    }
+
+    const columnXRanges: ColumnRange[] = [];
+    sortedHits.forEach((hit, idx) => {
+      const prev = sortedHits[idx - 1];
+      const next = sortedHits[idx + 1];
+      const center = hit.x;
+      const minX = prev ? (prev.x + center) / 2 : center - 40;
+      const maxX = next ? (next.x + center) / 2 : center + 40;
+      columnXRanges.push({
+        index: idx,
+        minX,
+        maxX,
+        key: hit.key,
+      });
     });
+
+    const findIndexByKey = (key: HeaderKey) =>
+      columnXRanges.find((c) => c.key === key)?.index;
+
+    const myntraSkuColIdx = findIndexByKey('myntra');
+    const sellerSkuColIdx = findIndexByKey('seller');
+    const descriptionColIdx = findIndexByKey('description');
+    const qtyColIdx = findIndexByKey('qty');
 
     myntraDebug.myntraSkuColumnIndex = myntraSkuColIdx ?? null;
     myntraDebug.sellerSkuColumnIndex = sellerSkuColIdx ?? null;
     myntraDebug.qtyColumnIndex = qtyColIdx ?? null;
-
-    // Compute simple column x-ranges for debug purposes
-    const headerColsSorted = [...headerCols].sort((a, b) => a.x - b.x);
-    const columnXRanges: Array<{ index: number; minX: number; maxX: number }> = [];
-    headerColsSorted.forEach((col, idx) => {
-      const prev = headerColsSorted[idx - 1];
-      const next = headerColsSorted[idx + 1];
-      const center = col.x;
-      const minX = prev ? (prev.x + center) / 2 : center - 20;
-      const maxX = next ? (next.x + center) / 2 : center + 20;
-      columnXRanges.push({ index: col.index, minX, maxX });
-    });
     myntraDebug.columnXRanges = columnXRanges;
 
-    const getColX = (colIdx: number | undefined): number | undefined =>
-      colIdx !== undefined && colIdx >= 0 && colIdx < headerCols.length
-        ? headerCols[colIdx].x
-        : undefined;
-
-    const myntraSkuX = getColX(myntraSkuColIdx);
-    const sellerSkuX = getColX(sellerSkuColIdx);
-    const qtyX = getColX(qtyColIdx);
+    const myntraSkuX = headerHits.find((h) => h.key === 'myntra')?.x;
+    const sellerSkuX = headerHits.find((h) => h.key === 'seller')?.x;
+    const qtyX = headerHits.find((h) => h.key === 'qty')?.x;
 
     // Compute line centers for row band calculation
     const lineCenters = lines.map((line) =>
@@ -196,16 +217,14 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     };
 
     const sellerSkuColumnRange = columnXRanges.find(
-      (c) => sellerSkuColIdx !== undefined && c.index === sellerSkuColIdx
+      (c) => c.key === 'seller'
     );
     const myntraSkuColumnRange = columnXRanges.find(
-      (c) => myntraSkuColIdx !== undefined && c.index === myntraSkuColIdx
+      (c) => c.key === 'myntra'
     );
-    const qtyColumnRange = columnXRanges.find(
-      (c) => qtyColIdx !== undefined && c.index === qtyColIdx
-    );
+    const qtyColumnRange = columnXRanges.find((c) => c.key === 'qty');
     const descriptionColumnRange = columnXRanges.find(
-      (c) => descriptionColIdx !== undefined && c.index === descriptionColIdx
+      (c) => c.key === 'description'
     );
 
     (myntraDebug as any).sellerSkuColumnRange = sellerSkuColumnRange;
@@ -289,18 +308,10 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       let quantity = 1;
       let qty_source: ParsedPicklistRow['qty_source'] = 'guessed';
 
-      // Myntra SKU (code-style cell) – this anchors a logical data row.
-      const myntraSkuTokens = buildCellTokens(i, myntraSkuColumnRange);
-      const myntraSkuText = assembleCodeCellText(myntraSkuTokens);
-      if (myntraSkuText) {
-        myntraSku = myntraSkuText.toUpperCase();
-      }
-
-      // If we don't have a Myntra SKU on this visual line, it's most likely a
-      // wrapped continuation line for the Seller SKU column. In that case we
-      // skip creating a separate row; the continuation tokens are already
-      // captured by the previous row via buildCellTokens wrap logic.
-      if (!myntraSku) {
+      if (!myntraSku && myntraSkuColumnRange) {
+        // When we have a detected Myntra SKU column, treat rows without a
+        // Myntra SKU as wrapped continuation lines (already captured via
+        // buildCellTokens) and skip creating a separate row here.
         continue;
       }
 
