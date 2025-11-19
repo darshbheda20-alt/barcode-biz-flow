@@ -33,6 +33,8 @@ interface ParsedPicklistRow {
     seller_sku_x?: number;
     quantity_x?: number;
   };
+  seller_sku_raw_tokens?: { str: string; x: number; y: number }[];
+  seller_sku_assembled?: string;
 }
 
 interface MyntraUploadProps {
@@ -169,7 +171,72 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     const sellerSkuX = getColX(sellerSkuColIdx);
     const qtyX = getColX(qtyColIdx);
 
-    // Parse each data row strictly by columns
+    // Compute line centers for row band calculation
+    const lineCenters = lines.map((line) =>
+      line.length
+        ? line.reduce((sum, item) => sum + item.y, 0) / line.length
+        : 0
+    );
+
+    const getRowBounds = (rowIndex: number) => {
+      const center = lineCenters[rowIndex];
+      const prevCenter =
+        rowIndex > 0 ? lineCenters[rowIndex - 1] : center - 10;
+      const nextCenter =
+        rowIndex < lineCenters.length - 1
+          ? lineCenters[rowIndex + 1]
+          : center + 10;
+      const rowTop = (prevCenter + center) / 2;
+      const rowBottom = (center + nextCenter) / 2;
+      return { rowTop, rowBottom };
+    };
+
+    const sellerSkuColumnRange = columnXRanges.find(
+      (c) => sellerSkuColIdx !== undefined && c.index === sellerSkuColIdx
+    );
+    const myntraSkuColumnRange = columnXRanges.find(
+      (c) => myntraSkuColIdx !== undefined && c.index === myntraSkuColIdx
+    );
+    const qtyColumnRange = columnXRanges.find(
+      (c) => qtyColIdx !== undefined && c.index === qtyColIdx
+    );
+
+    (myntraDebug as any).sellerSkuColumnRange = sellerSkuColumnRange;
+    (myntraDebug as any).qtyColumnRange = qtyColumnRange;
+
+    type TextItem = (typeof text_items)[number];
+    const yTolerance = 2;
+
+    const buildCellTokens = (
+      rowIndex: number,
+      colRange?: { minX: number; maxX: number }
+    ): TextItem[] => {
+      if (!colRange) return [];
+      const { rowTop, rowBottom } = getRowBounds(rowIndex);
+      const rowItems = text_items.filter(
+        (item) =>
+          item.y >= rowTop - yTolerance && item.y <= rowBottom + yTolerance
+      );
+
+      return rowItems
+        .filter(
+          (item) =>
+            item.x >= colRange.minX &&
+            item.x <= colRange.maxX
+        )
+        .sort((a, b) => (a.y === b.y ? a.x - b.x : a.y - b.y));
+    };
+
+    const assembleCellText = (tokens: TextItem[]): string => {
+      if (!tokens.length) return '';
+      const parts = tokens.map((t) => t.str);
+      let joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+      // Remove common extraneous separators but preserve hyphens
+      joined = joined.replace(/[|,]+/g, '').trim();
+      return joined;
+    };
+
+    // Parse each data row strictly by columns using assembled cells
     for (let i = headerRowIndex + 1; i < lines.length; i++) {
       const line = lines[i];
       if (!line || line.length === 0) continue;
@@ -182,38 +249,44 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       let quantity = 1;
       let qty_source: ParsedPicklistRow['qty_source'] = 'guessed';
 
-      if (myntraSkuX !== undefined) {
-        myntraSku = extractColumnValue(line, myntraSkuX, 20).trim();
+      const myntraSkuTokens = buildCellTokens(i, myntraSkuColumnRange);
+      const myntraSkuText = assembleCellText(myntraSkuTokens);
+      if (myntraSkuText) {
+        myntraSku = myntraSkuText;
       }
 
-      if (sellerSkuX !== undefined) {
-        const rawSeller = extractColumnValue(line, sellerSkuX, 20).trim();
-        const sellerSkuPattern = /^[A-Z0-9\-]{6,}$/;
-        if (sellerSkuPattern.test(rawSeller)) {
-          sellerSku = rawSeller;
-        } else {
-          sellerSku = '';
-        }
-      }
-
-      if (qtyX !== undefined) {
-        const qtyText = extractColumnValue(line, qtyX, 20).trim();
-        const qtyResult = extractQuantity(qtyText);
-        if (Number.isFinite(qtyResult.qty) && qtyResult.qty > 0) {
-          quantity = qtyResult.qty;
-          qty_source = 'column';
-        } else {
-          quantity = 1;
-          qty_source = 'guessed';
-        }
+      const sellerSkuTokens = buildCellTokens(i, sellerSkuColumnRange);
+      const sellerSkuAssembled = assembleCellText(sellerSkuTokens);
+      const sellerSkuPattern = /^[A-Z0-9\-]{6,}$/;
+      if (sellerSkuAssembled && sellerSkuPattern.test(sellerSkuAssembled)) {
+        sellerSku = sellerSkuAssembled;
       } else {
-        quantity = 1;
-        qty_source = 'guessed';
+        sellerSku = '';
       }
 
-      // Build product description from remaining tokens (not used for SKU inference)
-      const sortedByX = [...line].sort((a, b) => a.x - b.x);
-      const descItems = sortedByX.filter((item) => {
+      const qtyTokens = buildCellTokens(i, qtyColumnRange);
+      const qtyText = assembleCellText(qtyTokens);
+      if (qtyText) {
+        const match = qtyText.match(/\d+/);
+        if (match) {
+          const qtyVal = parseInt(match[0], 10);
+          if (Number.isFinite(qtyVal) && qtyVal > 0) {
+            quantity = qtyVal;
+            qty_source = 'column';
+          }
+        }
+      }
+
+      const { rowTop, rowBottom } = getRowBounds(i);
+      const rowItems = text_items
+        .filter(
+          (item) =>
+            item.y >= rowTop - yTolerance &&
+            item.y <= rowBottom + yTolerance
+        )
+        .sort((a, b) => a.x - b.x);
+
+      const descItems = rowItems.filter((item) => {
         const text = item.str.trim();
         return (
           text &&
@@ -222,7 +295,10 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
           text !== quantity.toString()
         );
       });
-      const productDescription = descItems.map((item) => item.str).join(' ').trim();
+      const productDescription = descItems
+        .map((item) => item.str)
+        .join(' ')
+        .trim();
 
       rows.push({
         myntra_sku: myntraSku,
@@ -238,6 +314,12 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
           seller_sku_x: sellerSkuX,
           quantity_x: qtyX,
         },
+        seller_sku_raw_tokens: sellerSkuTokens.map((t) => ({
+          str: t.str,
+          x: t.x,
+          y: t.y,
+        })),
+        seller_sku_assembled: sellerSkuAssembled,
       });
     }
 
