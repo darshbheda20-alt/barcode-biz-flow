@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClipboardList, Printer, Package } from "lucide-react";
 import { FlipkartUpload } from "@/components/process-orders/FlipkartUpload";
+import { AmazonUpload } from "@/components/process-orders/AmazonUpload";
 import { PicklistView } from "@/components/process-orders/PicklistView";
 import { UnmappedSKUs } from "@/components/process-orders/UnmappedSKUs";
 
@@ -50,18 +51,7 @@ export default function ProcessOrders() {
                 <FlipkartUpload onOrdersParsed={() => {}} />
 
                 {/* Amazon Section */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Amazon</CardTitle>
-                    <CardDescription>Upload label and invoice PDFs</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      Upload Amazon labels and invoices (separate or combined files).
-                    </p>
-                    {/* File upload component will go here */}
-                  </CardContent>
-                </Card>
+                <AmazonUpload onOrdersParsed={() => {}} />
 
                 {/* Myntra Section */}
                 <Card>

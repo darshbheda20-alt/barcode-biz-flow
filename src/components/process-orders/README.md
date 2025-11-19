@@ -1,5 +1,93 @@
 # Process Orders - PDF Parsing Guide
 
+## Amazon PDF Parsing
+
+The Amazon parser extracts order details from Amazon invoice/label PDFs with strict exact-match policies to prevent incorrect SKU mappings.
+
+### Current Extraction Patterns
+
+```javascript
+// Order ID: Amazon format (123-1234567-1234567)
+/Order\s*(?:ID|#)[:\s]*([\d\-]{15,})/i
+/(\d{3}-\d{7}-\d{7})/
+
+// ASIN with Seller SKU in parentheses
+/\|\s*(B0[A-Z0-9]{8,})\s*\(\s*([^\)]+?)\s*\)/gi
+
+// Product Description with ASIN and optional Seller SKU
+/(.+?)\s*\|\s*(B0[A-Z0-9]{8,})\s*(?:\(\s*([^\)]+?)\s*\))?/gi
+
+// Quantity extraction
+/Qty[:\s]*(\d+)/i
+/Quantity[:\s]*(\d+)/i
+```
+
+### Key Features
+
+1. **Exact Match Only**: No fuzzy matching or auto-assignment
+2. **Multi-Page Support**: Iterates all pages in PDF
+3. **Multi-Product Support**: Extracts all products from each page
+4. **Seller SKU Priority**: Prefers seller SKU over ASIN when both present
+5. **Debug Export**: Downloadable JSON with all parsed data
+6. **Duplicate Prevention**: Checks existing orders before insertion
+
+### Parsed Data Structure
+
+```typescript
+interface ParsedPage {
+  page_number: number;
+  raw_text: string;
+  parsed_lines: [
+    {
+      order_id: string;      // e.g., "404-0340551-2394744"
+      asin: string;          // e.g., "B0ABCDEFGH"
+      seller_sku: string;    // e.g., "LGO-TP2023-BLK-L"
+      qty: number;           // defaults to 1 if not found
+      product_name?: string;
+      raw_line: string;      // for debugging
+    }
+  ]
+}
+```
+
+### Mapping Logic
+
+1. **Check sku_aliases**: Look for exact match in `sku_aliases` table where `marketplace='Amazon'`
+2. **Check products**: Look for exact match in `master_sku` or `barcode` columns
+3. **No Match**: Set `product_id=NULL` and surface in Unmapped SKUs UI
+
+**CRITICAL**: No fuzzy matching, no substring matching, no "closest match". Only exact matches are accepted.
+
+### Unmapped SKU Workflow
+
+When a seller SKU is not found:
+1. Order is saved with `product_id=NULL`
+2. `marketplace_sku` is set to the seller SKU (or ASIN if no seller SKU)
+3. `master_sku` is set to same value as fallback
+4. Unmapped SKUs section displays the item
+5. User must explicitly:
+   - Map to existing product (via searchable dropdown)
+   - Create new product skeleton (pre-filled modal)
+   - Skip & flag for later review
+
+### Testing
+
+See `AMAZON_PARSER_QA.md` for comprehensive test scenarios and validation steps.
+
+Test fixture: `document - 2025-11-16T122256.058.pdf`
+- Expected Order ID: `404-0340551-2394744`
+- Expected Seller SKU: `LGO-TP2023-BLK-L`
+- Expected Quantity: `1`
+
+### Improving Parsing Accuracy
+
+1. **Collect Sample PDFs**: Test with various Amazon invoice formats
+2. **Pattern Refinement**: Adjust regex patterns based on real invoices
+3. **OCR Enhancement**: Add OCR retry option for image-based PDFs
+4. **Validation Rules**: Ensure extracted data passes sanity checks
+
+---
+
 ## Flipkart PDF Parsing
 
 The current implementation uses regex patterns to extract order details from Flipkart PDFs. These patterns may need adjustment based on actual Flipkart invoice/label formats.
