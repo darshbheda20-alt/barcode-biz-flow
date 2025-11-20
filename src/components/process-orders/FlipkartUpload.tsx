@@ -92,6 +92,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       const { page_number, raw_text, text_items } = parsedPage;
       console.log(`=== PARSING PAGE ${page_number} ===`);
       console.log('Text items count:', text_items.length);
+      console.log('Raw text sample:', raw_text.substring(0, 500));
       
       const productLines: ParsedOrder[] = [];
       
@@ -111,6 +112,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       lines.sort((a, b) => b.y - a.y);
       lines.forEach(line => line.items.sort((a, b) => a.x - b.x));
       
+      console.log(`Grouped into ${lines.length} lines`);
+      
       // Find header row containing SKU and QTY columns
       let headerLineIndex = -1;
       let skuColumnX: number | null = null;
@@ -118,7 +121,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       
       for (let i = 0; i < lines.length; i++) {
         const lineText = lines[i].items.map(item => item.str).join(' ');
-        if (/SKU\s*ID/i.test(lineText) && /QTY/i.test(lineText)) {
+        if (/SKU/i.test(lineText) && /QTY/i.test(lineText)) {
           headerLineIndex = i;
           
           // Find column X positions
@@ -137,6 +140,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       if (headerLineIndex >= 0 && skuColumnX !== null && qtyColumnX !== null) {
         const xTolerance = 30;
         const wrapTolerance = 14;
+        
+        console.log(`Processing data rows starting from line ${headerLineIndex + 1}`);
         
         // Process all data rows after header
         for (let i = headerLineIndex + 1; i < lines.length; i++) {
@@ -159,11 +164,14 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
           // Assemble SKU (preserve hyphens and join fragments)
           let sku = skuItems.map(item => item.str.trim()).join('').replace(/\s+/g, '');
           
+          console.log(`Row ${i}: Raw SKU tokens = ${skuItems.map(s => s.str).join('|')}, Assembled = ${sku}`);
+          
           // Validate SKU pattern
           const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
           if (!skuPattern.test(sku)) {
             // Check if this line is actually a product description or other data
             const lineText = currentLine.items.map(item => item.str).join(' ');
+            console.log(`Row ${i}: SKU validation failed, lineText = ${lineText}`);
             if (!/Lango|Product|Description|TOTAL|Handling|Price/i.test(lineText)) {
               continue;
             }
@@ -208,6 +216,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             paymentType: orderContext.paymentType
           });
         }
+      } else {
+        console.log('Header not found or columns not detected, trying fallback regex...');
       }
       
       // Fallback: Use regex patterns if positional parsing fails
