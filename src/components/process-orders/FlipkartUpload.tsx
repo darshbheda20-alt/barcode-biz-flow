@@ -42,161 +42,223 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     return dateStr;
   };
 
-  const extractTextFromPDF = async (file: File): Promise<string[]> => {
+  interface ParsedPage {
+    page_number: number;
+    raw_text: string;
+    text_items: Array<{ str: string; x: number; y: number; width: number; height: number }>;
+    parsed_lines: Array<{
+      sku: string;
+      quantity: number;
+      productName: string;
+      raw_line: string;
+      row_index?: number;
+      qty_source: string;
+    }>;
+  }
+
+  const extractTextFromPDF = async (file: File): Promise<ParsedPage[]> => {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const pages: string[] = [];
+    const pages: ParsedPage[] = [];
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
-      pages.push(pageText);
+      
+      // Preserve positional information
+      const text_items = textContent.items.map((item: any) => ({
+        str: item.str,
+        x: item.transform[4],
+        y: item.transform[5],
+        width: item.width,
+        height: item.height
+      }));
+      
+      const raw_text = text_items.map(item => item.str).join(' ');
+      
+      pages.push({
+        page_number: i,
+        raw_text,
+        text_items,
+        parsed_lines: []
+      });
     }
 
     return pages;
   };
 
-  const parseFlipkartPage = (text: string, fileName: string): ParsedOrder[] => {
+  const parseFlipkartPage = (parsedPage: ParsedPage, orderContext: { orderId: string; invoiceNumber: string; invoiceDate: string; trackingId: string; paymentType: string }): ParsedOrder[] => {
     try {
-      console.log('=== PARSING PAGE ===');
-      console.log('File:', fileName);
-      console.log('Text length:', text.length);
-      console.log('Raw text sample:', text.substring(0, 500));
+      const { page_number, raw_text, text_items } = parsedPage;
+      console.log(`=== PARSING PAGE ${page_number} ===`);
+      console.log('Text items count:', text_items.length);
       
-      // Extract order-level data (common to all products on this page)
-      const orderIdMatch = text.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || text.match(/OD\d{15,}/i);
-      const orderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[0]) : '';
-
-      const invoiceMatch = text.match(/Invoice\s*No[:\s]+([A-Z0-9]+)/i);
-      const invoiceNumber = invoiceMatch ? invoiceMatch[1] : '';
-
-      const dateMatch = text.match(/Invoice\s*Date[:\s]+(\d{1,2}-\d{1,2}-\d{4})/i);
-      const invoiceDate = dateMatch ? dateMatch[1] : '';
-
-      const trackingMatch = text.match(/AWB\s*No\.?\s*\(N\)[:\s]+([A-Z0-9]+)/i) || 
-                           text.match(/AWB[:\s]+([A-Z0-9]+)/i);
-      const trackingId = trackingMatch ? trackingMatch[1] : '';
-
-      const paymentType = text.match(/COD|Cash\s+on\s+Delivery/i) ? 'COD' : 'Prepaid';
-
-      if (!orderId && !trackingId && !invoiceNumber) {
-        console.warn(`Could not extract essential order data from ${fileName}`);
-        return [];
-      }
-
-      // Extract ALL product lines from the page using multiple patterns
       const productLines: ParsedOrder[] = [];
-      const processedSkus = new Set<string>(); // Track SKUs to avoid duplicates
       
-      console.log('=== SEARCHING FOR SKUS ===');
+      // Group text items into lines based on Y coordinate
+      const yTolerance = 4;
+      const lines = text_items.reduce((acc, item) => {
+        const existingLine = acc.find(line => Math.abs(line.y - item.y) < yTolerance);
+        if (existingLine) {
+          existingLine.items.push(item);
+        } else {
+          acc.push({ y: item.y, items: [item] });
+        }
+        return acc;
+      }, [] as Array<{ y: number; items: typeof text_items }>);
       
-      // Pattern 1: More flexible table format that handles variations
-      // Matches: | SKU-WITH-DASHES | ... | number |
-      const tablePattern1 = /\|\s*([A-Z]{3,}(?:-[A-Z0-9]+){2,})\s*\|[^|]*\|\s*(\d+)\s*\|/gi;
-      let match;
+      // Sort lines by Y (top to bottom) and items within lines by X (left to right)
+      lines.sort((a, b) => b.y - a.y);
+      lines.forEach(line => line.items.sort((a, b) => a.x - b.x));
       
-      while ((match = tablePattern1.exec(text)) !== null) {
-        const sku = match[1].trim();
-        const quantity = parseInt(match[2]);
+      // Find header row containing SKU and QTY columns
+      let headerLineIndex = -1;
+      let skuColumnX: number | null = null;
+      let qtyColumnX: number | null = null;
+      
+      for (let i = 0; i < lines.length; i++) {
+        const lineText = lines[i].items.map(item => item.str).join(' ');
+        if (/SKU\s*ID/i.test(lineText) && /QTY/i.test(lineText)) {
+          headerLineIndex = i;
+          
+          // Find column X positions
+          const skuItem = lines[i].items.find(item => /SKU/i.test(item.str));
+          const qtyItem = lines[i].items.find(item => /QTY/i.test(item.str));
+          
+          if (skuItem) skuColumnX = skuItem.x;
+          if (qtyItem) qtyColumnX = qtyItem.x;
+          
+          console.log(`Found header at line ${i}, SKU col X: ${skuColumnX}, QTY col X: ${qtyColumnX}`);
+          break;
+        }
+      }
+      
+      // Extract product rows (all rows after header that contain data)
+      if (headerLineIndex >= 0 && skuColumnX !== null && qtyColumnX !== null) {
+        const xTolerance = 30;
+        const wrapTolerance = 14;
         
-        if (!processedSkus.has(sku)) {
-          processedSkus.add(sku);
+        // Process all data rows after header
+        for (let i = headerLineIndex + 1; i < lines.length; i++) {
+          const currentLine = lines[i];
+          const nextLine = i + 1 < lines.length ? lines[i + 1] : null;
           
-          // Try to extract product name from nearby text
-          const matchPos = match.index;
-          const afterMatch = text.substring(matchPos, matchPos + 300);
-          const nameMatch = afterMatch.match(/\|\s*([A-Za-z][^|]{10,}?)\s*\|/);
-          const productName = nameMatch ? nameMatch[1].trim().split(/\s{2,}/)[0] : 'Unknown Product';
+          // Extract SKU from column
+          const skuItems = currentLine.items.filter(item => 
+            Math.abs(item.x - skuColumnX!) < xTolerance
+          );
           
-          console.log(`Pattern1 found: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
+          // Check if SKU might be wrapped to next line
+          if (nextLine && Math.abs(nextLine.y - currentLine.y) < wrapTolerance) {
+            const wrappedSkuItems = nextLine.items.filter(item => 
+              Math.abs(item.x - skuColumnX!) < xTolerance
+            );
+            skuItems.push(...wrappedSkuItems);
+          }
+          
+          // Assemble SKU (preserve hyphens and join fragments)
+          let sku = skuItems.map(item => item.str.trim()).join('').replace(/\s+/g, '');
+          
+          // Validate SKU pattern
+          const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
+          if (!skuPattern.test(sku)) {
+            // Check if this line is actually a product description or other data
+            const lineText = currentLine.items.map(item => item.str).join(' ');
+            if (!/Lango|Product|Description|TOTAL|Handling|Price/i.test(lineText)) {
+              continue;
+            }
+            continue;
+          }
+          
+          // Extract quantity from column
+          const qtyItems = currentLine.items.filter(item => 
+            Math.abs(item.x - qtyColumnX!) < xTolerance
+          );
+          
+          if (nextLine && Math.abs(nextLine.y - currentLine.y) < wrapTolerance) {
+            const wrappedQtyItems = nextLine.items.filter(item => 
+              Math.abs(item.x - qtyColumnX!) < xTolerance
+            );
+            qtyItems.push(...wrappedQtyItems);
+          }
+          
+          const qtyText = qtyItems.map(item => item.str.trim()).join('');
+          const quantity = parseInt(qtyText) || 1;
+          
+          // Extract product name (items between SKU and QTY columns)
+          const nameItems = currentLine.items.filter(item => 
+            item.x > (skuColumnX! + xTolerance) && item.x < (qtyColumnX! - xTolerance)
+          );
+          const productName = nameItems.map(item => item.str).join(' ').trim() || 'Unknown Product';
+          
+          // Build raw line for debugging
+          const raw_line = currentLine.items.map(item => item.str).join(' ');
+          
+          console.log(`Row ${i}: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
           
           productLines.push({
-            orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
-            invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-            invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
-            trackingId: trackingId || '',
+            orderId: orderContext.orderId || `FLP-${Date.now()}-${productLines.length}`,
+            invoiceNumber: orderContext.invoiceNumber || `INV-${Date.now()}`,
+            invoiceDate: orderContext.invoiceDate,
+            trackingId: orderContext.trackingId || '',
             sku: sku,
-            productName: productName || 'Unknown Product',
-            quantity: quantity || 1,
+            productName: productName,
+            quantity: quantity,
             amount: 0,
-            paymentType
+            paymentType: orderContext.paymentType
           });
         }
       }
       
-      // Pattern 2: Line-based pattern without strict pipe reliance
-      // Matches SKU patterns followed by description and qty on same or nearby lines
-      const linePattern = /([A-Z]{3,}(?:-[A-Z0-9]+){2,})[^\n]*?(?:QTY|Qty|qty)[^\d]*(\d+)/gi;
-      
-      while ((match = linePattern.exec(text)) !== null) {
-        const sku = match[1].trim();
-        const quantity = parseInt(match[2]);
-        
-        if (!processedSkus.has(sku)) {
-          processedSkus.add(sku);
-          console.log(`Pattern2 found: SKU=${sku}, QTY=${quantity}`);
-          
-          productLines.push({
-            orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
-            invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-            invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
-            trackingId: trackingId || '',
-            sku: sku,
-            productName: 'Unknown Product',
-            quantity: quantity || 1,
-            amount: 0,
-            paymentType
-          });
-        }
-      }
-
-
-      // Fallback: If no products found with patterns above, try inline pattern
+      // Fallback: Use regex patterns if positional parsing fails
       if (productLines.length === 0) {
-        console.log('No products found with table/line patterns, trying inline pattern...');
+        console.log('Positional parsing found no products, falling back to regex...');
+        const processedSkus = new Set<string>();
         
-        // Pattern 3: Inline format - "QTY [number] [SKU]"
-        const inlinePattern = /QTY\s+(\d+)\s+([A-Z][A-Z0-9\-]+)/gi;
+        // Pattern: | SKU-WITH-DASHES | ... | number |
+        const tablePattern = /\|\s*([A-Z]{3,}(?:-[A-Z0-9]+){2,})\s*\|[^|]*\|\s*(\d+)\s*\|/gi;
+        let match;
         
-        while ((match = inlinePattern.exec(text)) !== null) {
-          const quantity = parseInt(match[1]);
-          const sku = match[2].trim();
+        while ((match = tablePattern.exec(raw_text)) !== null) {
+          const sku = match[1].trim();
+          const quantity = parseInt(match[2]);
           
           if (!processedSkus.has(sku)) {
             processedSkus.add(sku);
-            console.log(`Inline pattern found: SKU=${sku}, QTY=${quantity}`);
+            
+            const matchPos = match.index;
+            const afterMatch = raw_text.substring(matchPos, matchPos + 300);
+            const nameMatch = afterMatch.match(/\|\s*([A-Za-z][^|]{10,}?)\s*\|/);
+            const productName = nameMatch ? nameMatch[1].trim().split(/\s{2,}/)[0] : 'Unknown Product';
+            
+            console.log(`Fallback regex found: SKU=${sku}, QTY=${quantity}`);
             
             productLines.push({
-              orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
-              invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-              invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
-              trackingId: trackingId || '',
+              orderId: orderContext.orderId || `FLP-${Date.now()}-${productLines.length}`,
+              invoiceNumber: orderContext.invoiceNumber || `INV-${Date.now()}`,
+              invoiceDate: orderContext.invoiceDate,
+              trackingId: orderContext.trackingId || '',
               sku: sku,
-              productName: 'Unknown Product',
-              quantity: quantity || 1,
+              productName: productName,
+              quantity: quantity,
               amount: 0,
-              paymentType
+              paymentType: orderContext.paymentType
             });
           }
         }
       }
-
-
-      console.log(`=== PARSE COMPLETE: Found ${productLines.length} product(s) ===`);
       
-      // If we found products, try to get the total amount for the order
-      if (productLines.length > 0) {
-        const amountMatch = text.match(/TOTAL\s*PRICE[:\s]+(\d+(?:\.\d{2})?)/i) ||
-                           text.match(/Total\s+(\d+\.\d{2})/i);
-        const totalAmount = amountMatch ? parseFloat(amountMatch[1]) : 0;
-        
-        // Distribute amount equally across products (or assign to first)
-        if (totalAmount > 0) {
-          productLines[0].amount = totalAmount;
-        }
-      }
-
+      console.log(`=== PAGE ${page_number} COMPLETE: Found ${productLines.length} product(s) ===`);
+      
+      // Store parsed_lines in parsedPage for debug JSON
+      parsedPage.parsed_lines = productLines.map(p => ({
+        sku: p.sku,
+        quantity: p.quantity,
+        productName: p.productName,
+        raw_line: `${p.sku} | ${p.productName} | ${p.quantity}`,
+        qty_source: 'column'
+      }));
+      
       return productLines;
       
     } catch (error) {
@@ -293,27 +355,48 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     setUploading(true);
     const allParsedOrders: ParsedOrder[] = [];
     const statusUpdates: typeof uploadStatus = [];
+    const debugData: { fileName: string; pages: ParsedPage[] }[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       let fileOrderCount = 0;
-      let fileDuplicateCount = 0;
       let fileSkippedCount = 0;
       
       try {
-        // Extract text from each page separately
-        const pages = await extractTextFromPDF(file);
+        // Extract text with positional info from each page
+        const parsedPages = await extractTextFromPDF(file);
+        debugData.push({ fileName: file.name, pages: parsedPages });
         
         // Upload file to storage once
         const storagePath = await uploadToStorage(file);
         
+        // Extract order-level context from first page
+        const firstPageText = parsedPages[0]?.raw_text || '';
+        
+        const orderIdMatch = firstPageText.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || firstPageText.match(/OD\d{15,}/i);
+        const orderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[0]) : '';
+
+        const invoiceMatch = firstPageText.match(/Invoice\s*No[:\s]+([A-Z0-9]+)/i);
+        const invoiceNumber = invoiceMatch ? invoiceMatch[1] : '';
+
+        const dateMatch = firstPageText.match(/Invoice\s*Date[:\s]+(\d{1,2}-\d{1,2}-\d{4})/i);
+        const invoiceDate = dateMatch ? convertDateFormat(dateMatch[1]) : new Date().toISOString().split('T')[0];
+
+        const trackingMatch = firstPageText.match(/AWB\s*No\.?\s*\(N\)[:\s]+([A-Z0-9]+)/i) || 
+                             firstPageText.match(/AWB[:\s]+([A-Z0-9]+)/i);
+        const trackingId = trackingMatch ? trackingMatch[1] : '';
+
+        const paymentType = firstPageText.match(/COD|Cash\s+on\s+Delivery/i) ? 'COD' : 'Prepaid';
+        
+        const orderContext = { orderId, invoiceNumber, invoiceDate, trackingId, paymentType };
+        
         // Parse each page - each page may contain MULTIPLE products
-        for (let pageNum = 0; pageNum < pages.length; pageNum++) {
-          const pageText = pages[pageNum];
+        for (let pageNum = 0; pageNum < parsedPages.length; pageNum++) {
+          const parsedPage = parsedPages[pageNum];
           
           try {
             // Parse ALL product lines from this page
-            const parsedProducts = parseFlipkartPage(pageText, `${file.name} (page ${pageNum + 1})`);
+            const parsedProducts = parseFlipkartPage(parsedPage, orderContext);
             
             if (parsedProducts.length === 0) {
               console.log(`Page ${pageNum + 1} of ${file.name}: No valid product data found`);
@@ -375,17 +458,10 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         }
 
         if (fileOrderCount > 0) {
-          const duplicateMsg = fileDuplicateCount > 0 ? ` (${fileDuplicateCount} duplicate(s) skipped)` : '';
           statusUpdates.push({
             file: file.name,
             status: 'success',
-            message: `Processed ${fileOrderCount} new order(s) from ${pages.length} page(s)${duplicateMsg}`
-          });
-        } else if (fileDuplicateCount > 0) {
-          statusUpdates.push({
-            file: file.name,
-            status: 'error',
-            message: `All ${fileDuplicateCount} order(s) were duplicates - already processed`
+            message: `Processed ${fileOrderCount} new order(s) from ${parsedPages.length} page(s)`
           });
         } else {
           statusUpdates.push({
@@ -407,6 +483,19 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
 
     setUploadStatus(statusUpdates);
     setUploading(false);
+
+    // Generate debug JSON
+    const debugJSON = JSON.stringify(debugData, null, 2);
+    console.log('=== DEBUG JSON ===');
+    console.log(debugJSON);
+    
+    // Create downloadable debug file
+    const debugBlob = new Blob([debugJSON], { type: 'application/json' });
+    const debugUrl = URL.createObjectURL(debugBlob);
+    const debugLink = document.createElement('a');
+    debugLink.href = debugUrl;
+    debugLink.download = `flipkart-debug-${Date.now()}.json`;
+    console.log('Debug JSON available for download - check console for details');
 
     const totalDuplicates = statusUpdates.reduce((sum, s) => {
       const match = s.message.match(/(\d+) duplicate/);
