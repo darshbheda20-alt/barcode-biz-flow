@@ -427,6 +427,59 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     return null;
   };
 
+  const parseMyntraCsv = (csvText: string): ParsedPicklistRow[] => {
+    const rows: ParsedPicklistRow[] = [];
+    const lines = csvText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    if (lines.length <= 1) {
+      return rows;
+    }
+
+    const headerLine = lines[0];
+    const headers = headerLine
+      .split(',')
+      .map((h) => h.replace(/^\uFEFF/, '').trim().toLowerCase());
+
+    const myntraIdx = headers.indexOf('myntraskucode');
+    const sellerIdx = headers.indexOf('sellerskucode');
+    const descIdx = headers.indexOf('productdescription');
+    const qtyIdx = headers.indexOf('quantity');
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      const cells = line.split(',');
+
+      const myntraSku = myntraIdx >= 0 ? (cells[myntraIdx] || '').trim() : '';
+      const sellerSku = sellerIdx >= 0 ? (cells[sellerIdx] || '').trim() : '';
+      const productDescription = descIdx >= 0 ? (cells[descIdx] || '').trim() : '';
+      const qtyRaw = qtyIdx >= 0 ? (cells[qtyIdx] || '').trim() : '1';
+      const parsedQty = parseInt(qtyRaw, 10);
+      const quantity = Number.isFinite(parsedQty) && parsedQty > 0 ? parsedQty : 1;
+
+      if (!sellerSku && !myntraSku) {
+        continue;
+      }
+
+      rows.push({
+        myntra_sku: myntraSku,
+        seller_sku: sellerSku,
+        product_description: productDescription,
+        quantity,
+        qty_source: 'column',
+        raw_line: line,
+        source: 'pdf.js',
+        page_number: 1,
+      });
+    }
+
+    return rows;
+  };
+
   const uploadToStorage = async (file: File): Promise<string> => {
     const filePath = `myntra/${Date.now()}_${file.name}`;
     const { data, error } = await supabase.storage
@@ -441,7 +494,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
     if (!file) {
       toast({
         title: "No file selected",
-        description: "Please select a Myntra picklist PDF file to upload",
+        description: "Please select a Myntra picklist file to upload (PDF or CSV)",
         variant: "destructive",
       });
       return;
@@ -452,33 +505,51 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
 
     try {
       console.log(`Processing Myntra picklist: ${file.name}`);
-      
-      // Extract pages with positional info
-      const pages = await extractPagesFromPDF(file);
-      
-      const allParsedRows: ParsedPicklistRow[] = [];
-      
-      // Parse each page
-      for (const page of pages) {
-        // Check if OCR needed
-        if (needsOCR(page.raw_text)) {
-          console.log(`Page ${page.page_number} may need OCR`);
-          page.ocr_text = '(OCR would run here - placeholder)';
-        }
-        
-        const parsedRows = parseMyntraPicklistPage(page);
-        page.parsed_lines = parsedRows;
-        allParsedRows.push(...parsedRows);
-      }
 
-      if (allParsedRows.length === 0) {
-        setUploadStatus({
-          status: 'error',
-          message: 'No valid products found in picklist'
-        });
-        setDebugData(pages);
-        setUploading(false);
-        return;
+      const fileNameLower = file.name.toLowerCase();
+      const isCsv = file.type === 'text/csv' || fileNameLower.endsWith('.csv');
+
+      let pages: ParsedPage[] = [];
+      let allParsedRows: ParsedPicklistRow[] = [];
+
+      if (isCsv) {
+        const csvText = await file.text();
+        allParsedRows = parseMyntraCsv(csvText);
+
+        if (allParsedRows.length === 0) {
+          setUploadStatus({
+            status: 'error',
+            message: 'No valid products found in CSV',
+          });
+          setUploading(false);
+          return;
+        }
+      } else {
+        // Extract pages with positional info
+        pages = await extractPagesFromPDF(file);
+
+        // Parse each page
+        for (const page of pages) {
+          // Check if OCR needed
+          if (needsOCR(page.raw_text)) {
+            console.log(`Page ${page.page_number} may need OCR`);
+            page.ocr_text = '(OCR would run here - placeholder)';
+          }
+
+          const parsedRows = parseMyntraPicklistPage(page);
+          page.parsed_lines = parsedRows;
+          allParsedRows.push(...parsedRows);
+        }
+
+        if (allParsedRows.length === 0) {
+          setUploadStatus({
+            status: 'error',
+            message: 'No valid products found in picklist',
+          });
+          setDebugData(pages);
+          setUploading(false);
+          return;
+        }
       }
 
       // Upload file to storage
@@ -493,17 +564,17 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
         try {
           // Map seller SKU to master SKU
           const masterSku = await mapSKUToMasterSKU(row.seller_sku);
-          
+
           let productId = null;
           let isUnmapped = false;
-          
+
           if (masterSku) {
             const { data: productData } = await supabase
               .from('products')
               .select('id')
               .eq('master_sku', masterSku)
               .maybeSingle();
-            
+
             productId = productData?.id || null;
           } else {
             isUnmapped = true;
@@ -539,7 +610,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
               product_name: row.product_description,
               quantity: row.quantity,
               workflow_status: 'pending',
-              uploaded_file_path: uploadedFilePath
+              uploaded_file_path: uploadedFilePath,
             });
 
           if (insertError) {
@@ -550,14 +621,17 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
               unmappedCount++;
             }
           }
-
         } catch (rowError) {
           console.error(`Error processing row:`, rowError);
         }
       }
 
-      // Store debug data
-      setDebugData(pages);
+      // Store debug data for PDF uploads only
+      if (!isCsv) {
+        setDebugData(pages);
+      } else {
+        setDebugData(null);
+      }
 
       // Trigger UI refresh
       onOrdersParsed();
@@ -575,15 +649,16 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
 
       setUploadStatus({
         status: newOrderCount > 0 ? 'success' : 'error',
-        message: statusMessage
+        message: statusMessage,
       });
 
       // Show toast
       if (newOrderCount > 0) {
-        const description = unmappedCount > 0
-          ? `${newOrderCount} item(s) processed. ${unmappedCount} unmapped SKU${unmappedCount > 1 ? 's' : ''} require mapping below.`
-          : `${newOrderCount} item(s) processed from Myntra picklist`;
-        
+        const description =
+          unmappedCount > 0
+            ? `${newOrderCount} item(s) processed. ${unmappedCount} unmapped SKU${unmappedCount > 1 ? 's' : ''} require mapping below.`
+            : `${newOrderCount} item(s) processed from Myntra picklist`;
+
         toast({
           title: "Myntra picklist uploaded successfully",
           description,
@@ -595,12 +670,11 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
           variant: "destructive",
         });
       }
-
     } catch (error) {
       console.error(`Error processing Myntra picklist:`, error);
       setUploadStatus({
         status: 'error',
-        message: getUserFriendlyError(error)
+        message: getUserFriendlyError(error),
       });
       toast({
         title: "Upload failed",
@@ -631,7 +705,7 @@ export const MyntraUpload = ({ onOrdersParsed }: MyntraUploadProps) => {
       <CardHeader>
         <CardTitle>Myntra</CardTitle>
         <CardDescription>
-          Upload Myntra Picklist PDF (supports layout-agnostic parsing)
+          Upload Myntra Picklist (PDF or CSV)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
