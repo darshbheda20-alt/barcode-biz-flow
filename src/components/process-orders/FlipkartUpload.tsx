@@ -85,18 +85,22 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       }
 
       // Extract ALL product lines from the page using global regex
-      // Pattern: Find all SKUs in the format after "QTY [number] [SKU] |"
+      // Handle both table format and inline format
       const productLines: ParsedOrder[] = [];
       
-      // Find all lines that match the Flipkart product table format
-      // Pattern: "QTY [number] [SKU] | [product description]"
-      const qtySkuPattern = /QTY\s+(\d+)\s+([A-Z][A-Z0-9\-]+?)\s+\|\s*(.+?)(?=\s+HSN|$)/gi;
+      // Pattern 1: Table format - "| SKU | Description | QTY |"
+      const tablePattern = /\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|[^|]+\|\s*(\d+)\s*\|/gi;
       let match;
       
-      while ((match = qtySkuPattern.exec(text)) !== null) {
-        const quantity = parseInt(match[1]);
-        const sku = match[2].trim();
-        const productName = match[3].trim().split(/\s{2,}/)[0]; // Take first part before multiple spaces
+      while ((match = tablePattern.exec(text)) !== null) {
+        const sku = match[1].trim();
+        const quantity = parseInt(match[2]);
+        
+        // Try to extract product name from nearby text
+        const skuPos = text.indexOf(sku);
+        const afterSku = text.substring(skuPos + sku.length, skuPos + sku.length + 200);
+        const nameMatch = afterSku.match(/\|\s*([^|]{10,}?)\s*\|/);
+        const productName = nameMatch ? nameMatch[1].trim().split(/\s{2,}/)[0] : 'Unknown Product';
         
         console.log(`Found product line: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
         
@@ -113,31 +117,27 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         });
       }
 
-      // Fallback: If no products found with main pattern, try alternative patterns
+      // Fallback: If no products found with table pattern, try inline pattern
       if (productLines.length === 0) {
-        console.log('No products found with primary pattern, trying fallback patterns...');
+        console.log('No products found with table pattern, trying inline pattern...');
         
-        // Pattern 2: SKU between pipes
-        const altPattern = /\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|/gi;
-        const skuMatches = [...text.matchAll(altPattern)];
+        // Pattern 2: Inline format - "QTY [number] [SKU] |"
+        const inlinePattern = /QTY\s+(\d+)\s+([A-Z][A-Z0-9\-]+?)\s+\|/gi;
         
-        if (skuMatches.length > 0) {
-          console.log(`Found ${skuMatches.length} SKUs with fallback pattern`);
+        while ((match = inlinePattern.exec(text)) !== null) {
+          const quantity = parseInt(match[1]);
+          const sku = match[2].trim();
           
-          skuMatches.forEach((skuMatch, idx) => {
-            const sku = skuMatch[1].trim();
-            
-            productLines.push({
-              orderId: orderId || `FLP-${Date.now()}-${idx}`,
-              invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-              invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
-              trackingId: trackingId || '',
-              sku: sku,
-              productName: 'Unknown Product',
-              quantity: 1,
-              amount: 0,
-              paymentType
-            });
+          productLines.push({
+            orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
+            invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
+            invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
+            trackingId: trackingId || '',
+            sku: sku,
+            productName: 'Unknown Product',
+            quantity: quantity || 1,
+            amount: 0,
+            paymentType
           });
         }
       }
@@ -285,20 +285,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             for (let prodIdx = 0; prodIdx < parsedProducts.length; prodIdx++) {
               const parsedProduct = parsedProducts[prodIdx];
               
-              // Check for duplicate invoice + SKU combination
-              const { data: existingOrder } = await supabase
-                .from('process_orders')
-                .select('invoice_number, marketplace_sku')
-                .eq('invoice_number', parsedProduct.invoiceNumber)
-                .eq('marketplace_sku', parsedProduct.sku)
-                .eq('platform', 'flipkart')
-                .maybeSingle();
-
-              if (existingOrder) {
-                console.log(`Page ${pageNum + 1}, Product ${prodIdx + 1}: Duplicate - Invoice ${parsedProduct.invoiceNumber} + SKU ${parsedProduct.sku}`);
-                fileDuplicateCount++;
-                continue;
-              }
+              // DUPLICATE CHECK REMOVED FOR TEST PHASE
+              // Allow re-uploading same PDFs during testing
 
               // STRICT EXACT MATCH - Map to Master SKU
               console.log(`Page ${pageNum + 1}, Product ${prodIdx + 1}: Attempting STRICT EXACT match for SKU:`, parsedProduct.sku);
