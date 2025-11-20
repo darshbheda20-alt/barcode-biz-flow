@@ -62,6 +62,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       console.log('=== PARSING PAGE ===');
       console.log('File:', fileName);
       console.log('Text length:', text.length);
+      console.log('Raw text sample:', text.substring(0, 500));
       
       // Extract order-level data (common to all products on this page)
       const orderIdMatch = text.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || text.match(/OD\d{15,}/i);
@@ -84,49 +85,57 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         return [];
       }
 
-      // Extract ALL product lines from the page using global regex
-      // Handle both table format and inline format
+      // Extract ALL product lines from the page using multiple patterns
       const productLines: ParsedOrder[] = [];
+      const processedSkus = new Set<string>(); // Track SKUs to avoid duplicates
       
-      // Pattern 1: Table format - "| SKU | Description | QTY |"
-      const tablePattern = /\|\s*([A-Z]{4,}(?:-[A-Z0-9]+){2,})\s*\|[^|]+\|\s*(\d+)\s*\|/gi;
+      console.log('=== SEARCHING FOR SKUS ===');
+      
+      // Pattern 1: More flexible table format that handles variations
+      // Matches: | SKU-WITH-DASHES | ... | number |
+      const tablePattern1 = /\|\s*([A-Z]{3,}(?:-[A-Z0-9]+){2,})\s*\|[^|]*\|\s*(\d+)\s*\|/gi;
       let match;
       
-      while ((match = tablePattern.exec(text)) !== null) {
+      while ((match = tablePattern1.exec(text)) !== null) {
         const sku = match[1].trim();
         const quantity = parseInt(match[2]);
         
-        // Try to extract product name from nearby text
-        const skuPos = text.indexOf(sku);
-        const afterSku = text.substring(skuPos + sku.length, skuPos + sku.length + 200);
-        const nameMatch = afterSku.match(/\|\s*([^|]{10,}?)\s*\|/);
-        const productName = nameMatch ? nameMatch[1].trim().split(/\s{2,}/)[0] : 'Unknown Product';
-        
-        console.log(`Found product line: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
-        
-        productLines.push({
-          orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
-          invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-          invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
-          trackingId: trackingId || '',
-          sku: sku,
-          productName: productName || 'Unknown Product',
-          quantity: quantity || 1,
-          amount: 0, // Per-product amount not available in this format
-          paymentType
-        });
+        if (!processedSkus.has(sku)) {
+          processedSkus.add(sku);
+          
+          // Try to extract product name from nearby text
+          const matchPos = match.index;
+          const afterMatch = text.substring(matchPos, matchPos + 300);
+          const nameMatch = afterMatch.match(/\|\s*([A-Za-z][^|]{10,}?)\s*\|/);
+          const productName = nameMatch ? nameMatch[1].trim().split(/\s{2,}/)[0] : 'Unknown Product';
+          
+          console.log(`Pattern1 found: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
+          
+          productLines.push({
+            orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
+            invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
+            invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
+            trackingId: trackingId || '',
+            sku: sku,
+            productName: productName || 'Unknown Product',
+            quantity: quantity || 1,
+            amount: 0,
+            paymentType
+          });
+        }
       }
-
-      // Fallback: If no products found with table pattern, try inline pattern
-      if (productLines.length === 0) {
-        console.log('No products found with table pattern, trying inline pattern...');
+      
+      // Pattern 2: Line-based pattern without strict pipe reliance
+      // Matches SKU patterns followed by description and qty on same or nearby lines
+      const linePattern = /([A-Z]{3,}(?:-[A-Z0-9]+){2,})[^\n]*?(?:QTY|Qty|qty)[^\d]*(\d+)/gi;
+      
+      while ((match = linePattern.exec(text)) !== null) {
+        const sku = match[1].trim();
+        const quantity = parseInt(match[2]);
         
-        // Pattern 2: Inline format - "QTY [number] [SKU] |"
-        const inlinePattern = /QTY\s+(\d+)\s+([A-Z][A-Z0-9\-]+?)\s+\|/gi;
-        
-        while ((match = inlinePattern.exec(text)) !== null) {
-          const quantity = parseInt(match[1]);
-          const sku = match[2].trim();
+        if (!processedSkus.has(sku)) {
+          processedSkus.add(sku);
+          console.log(`Pattern2 found: SKU=${sku}, QTY=${quantity}`);
           
           productLines.push({
             orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
@@ -142,6 +151,40 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         }
       }
 
+
+      // Fallback: If no products found with patterns above, try inline pattern
+      if (productLines.length === 0) {
+        console.log('No products found with table/line patterns, trying inline pattern...');
+        
+        // Pattern 3: Inline format - "QTY [number] [SKU]"
+        const inlinePattern = /QTY\s+(\d+)\s+([A-Z][A-Z0-9\-]+)/gi;
+        
+        while ((match = inlinePattern.exec(text)) !== null) {
+          const quantity = parseInt(match[1]);
+          const sku = match[2].trim();
+          
+          if (!processedSkus.has(sku)) {
+            processedSkus.add(sku);
+            console.log(`Inline pattern found: SKU=${sku}, QTY=${quantity}`);
+            
+            productLines.push({
+              orderId: orderId || `FLP-${Date.now()}-${productLines.length}`,
+              invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
+              invoiceDate: invoiceDate ? convertDateFormat(invoiceDate) : new Date().toISOString().split('T')[0],
+              trackingId: trackingId || '',
+              sku: sku,
+              productName: 'Unknown Product',
+              quantity: quantity || 1,
+              amount: 0,
+              paymentType
+            });
+          }
+        }
+      }
+
+
+      console.log(`=== PARSE COMPLETE: Found ${productLines.length} product(s) ===`);
+      
       // If we found products, try to get the total amount for the order
       if (productLines.length > 0) {
         const amountMatch = text.match(/TOTAL\s*PRICE[:\s]+(\d+(?:\.\d{2})?)/i) ||
@@ -154,7 +197,6 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         }
       }
 
-      console.log(`=== PARSE COMPLETE: Found ${productLines.length} product(s) ===`);
       return productLines;
       
     } catch (error) {
