@@ -50,6 +50,14 @@ export default function ScanLog() {
   const [consecutiveCount, setConsecutiveCount] = useState(0);
   const [sessionScans, setSessionScans] = useState<Array<{sku: string, qty: number}>>([]);
 
+  // Auto-map state (Apply to next scans)
+  const [activeAutoMap, setActiveAutoMap] = useState<{
+    barcode: string;
+    master_sku: string;
+    remaining_auto_scans: number;
+  } | null>(null);
+  const [applyToNextScans, setApplyToNextScans] = useState(false);
+
   // UI state
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [confirmationProduct, setConfirmationProduct] = useState<Product | null>(null);
@@ -125,6 +133,36 @@ export default function ScanLog() {
     if (isDuplicateScan(barcode)) return;
 
     setScannedBarcode(barcode);
+
+    // Check for active auto-map first
+    if (activeAutoMap && barcode === activeAutoMap.barcode) {
+      if (activeAutoMap.remaining_auto_scans > 0) {
+        // Auto-add without modal
+        await addStock(activeAutoMap.master_sku, 1);
+        const newRemaining = activeAutoMap.remaining_auto_scans - 1;
+        setActiveAutoMap({
+          ...activeAutoMap,
+          remaining_auto_scans: newRemaining
+        });
+        toast.success(`Auto-added +1 to ${activeAutoMap.master_sku} (remaining ${newRemaining})`);
+        return;
+      } else {
+        // Remaining is 0, re-prompt
+        setActiveAutoMap(null);
+        const products = await resolveBarcodeToProducts(barcode);
+        if (products.length > 0) {
+          setCandidateProducts(products);
+          setShowSKUSelector(true);
+        }
+        return;
+      }
+    }
+
+    // Different barcode clears auto-map
+    if (activeAutoMap && barcode !== activeAutoMap.barcode) {
+      setActiveAutoMap(null);
+      toast.info("Auto-add ended - different barcode");
+    }
 
     // In session mode, auto-add if same barcode
     if (sessionMode && barcode === lastBarcode) {
@@ -205,8 +243,15 @@ export default function ScanLog() {
     setLastSelectedMasterSKU(confirmationProduct.master_sku);
     setConsecutiveCount(prev => prev + 1);
 
-    // Check if we hit 5 consecutive
-    if (consecutiveCount + 1 >= 5 && !sessionMode) {
+    // If "Apply to next scans" was checked, set active auto-map
+    if (applyToNextScans) {
+      setActiveAutoMap({
+        barcode: scannedBarcode,
+        master_sku: confirmationProduct.master_sku,
+        remaining_auto_scans: Math.max(0, 5 - qty)
+      });
+      toast.success(`Auto-add enabled for ${confirmationProduct.master_sku} (${5 - qty} remaining)`);
+    } else if (consecutiveCount + 1 >= 5 && !sessionMode) {
       setShowSessionModal(true);
     } else {
       toast.success(`Stock received: +${qty}`);
@@ -215,20 +260,34 @@ export default function ScanLog() {
     setShowConfirmation(false);
     setConfirmationProduct(null);
     setPermanentMap(false);
+    setApplyToNextScans(false);
   };
 
   // Handle SKU selection (multiple matches)
-  const handleSKUSelect = async (product: Product) => {
-    await addStock(product.master_sku, 1, permanentMap);
+  const handleSKUSelect = async (product: Product, customQty?: number) => {
+    const qty = customQty || 1;
+    await addStock(product.master_sku, qty, permanentMap);
 
     setLastBarcode(scannedBarcode);
     setLastSelectedMasterSKU(product.master_sku);
     setConsecutiveCount(1);
 
-    toast.success(`Mapped to ${product.master_sku}`);
+    // If "Apply to next scans" was checked, set active auto-map
+    if (applyToNextScans) {
+      setActiveAutoMap({
+        barcode: scannedBarcode,
+        master_sku: product.master_sku,
+        remaining_auto_scans: Math.max(0, 5 - qty) // Reduce by qty if custom
+      });
+      toast.success(`Auto-add enabled for ${product.master_sku} (${5 - qty} remaining)`);
+    } else {
+      toast.success(`Mapped to ${product.master_sku}`);
+    }
+
     setShowSKUSelector(false);
     setCandidateProducts([]);
     setPermanentMap(false);
+    setApplyToNextScans(false);
   };
 
   // Enable session auto-add mode
@@ -419,6 +478,28 @@ export default function ScanLog() {
               <CardDescription>Scan products to add to available inventory</CardDescription>
             </CardHeader>
             <CardContent>
+              {activeAutoMap && (
+                <div className="mb-4 p-3 bg-primary/10 border border-primary rounded-lg flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                    <span className="font-medium">
+                      Auto-add: {activeAutoMap.master_sku} (Remaining: {activeAutoMap.remaining_auto_scans})
+                    </span>
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => {
+                      setActiveAutoMap(null);
+                      toast.info("Auto-add stopped");
+                    }}
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Stop
+                  </Button>
+                </div>
+              )}
+
               {sessionMode && (
                 <div className="mb-4 p-3 bg-primary/10 border border-primary rounded-lg flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -510,15 +591,33 @@ export default function ScanLog() {
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="permanent-map" 
-                      checked={permanentMap}
-                      onCheckedChange={(checked) => setPermanentMap(checked as boolean)}
-                    />
-                    <label htmlFor="permanent-map" className="text-sm cursor-pointer">
-                      Always map this barcode to this SKU
-                    </label>
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id="permanent-map" 
+                        checked={permanentMap}
+                        onCheckedChange={(checked) => setPermanentMap(checked as boolean)}
+                      />
+                      <label htmlFor="permanent-map" className="text-sm cursor-pointer">
+                        Always map this barcode to this SKU
+                      </label>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox 
+                          id="apply-to-next" 
+                          checked={applyToNextScans}
+                          onCheckedChange={(checked) => setApplyToNextScans(checked as boolean)}
+                        />
+                        <label htmlFor="apply-to-next" className="text-sm cursor-pointer font-medium">
+                          Apply to next scans (up to 5)
+                        </label>
+                      </div>
+                      <p className="text-xs text-muted-foreground ml-6">
+                        If checked, this SKU will be auto-selected for the next scans of this barcode. You will be re-prompted after every 5 scans.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -529,6 +628,7 @@ export default function ScanLog() {
                 </Button>
                 <Button variant="outline" onClick={() => {
                   setShowConfirmation(false);
+                  setActiveAutoMap(null); // Clear auto-map when changing SKU
                   setShowSKUSelector(true);
                   setCandidateProducts(confirmationProduct ? [confirmationProduct] : []);
                 }}>
@@ -589,15 +689,38 @@ export default function ScanLog() {
               </DialogHeader>
 
               <div className="space-y-4">
-                <div className="flex items-center space-x-2">
-                  <Checkbox 
-                    id="permanent-map-multi" 
-                    checked={permanentMap}
-                    onCheckedChange={(checked) => setPermanentMap(checked as boolean)}
-                  />
-                  <label htmlFor="permanent-map-multi" className="text-sm cursor-pointer">
-                    Always map this barcode to selected SKU
-                  </label>
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="permanent-map-multi" 
+                      checked={permanentMap}
+                      onCheckedChange={(checked) => setPermanentMap(checked as boolean)}
+                    />
+                    <label htmlFor="permanent-map-multi" className="text-sm cursor-pointer">
+                      Always map this barcode to selected SKU
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id="apply-to-next-multi" 
+                        checked={applyToNextScans}
+                        onCheckedChange={(checked) => setApplyToNextScans(checked as boolean)}
+                      />
+                      <label htmlFor="apply-to-next-multi" className="text-sm cursor-pointer font-medium">
+                        Apply to next scans (up to 5)
+                      </label>
+                      {applyToNextScans && (
+                        <span className="text-xs text-primary font-medium ml-auto">
+                          Remaining: 5
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      If checked, this SKU will be auto-selected for the next scans of this barcode. You will be re-prompted after every 5 scans.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -705,6 +828,7 @@ export default function ScanLog() {
                   Stop
                 </Button>
                 <Button variant="outline" onClick={() => {
+                  setActiveAutoMap(null); // Clear auto-map when changing SKU
                   setShowSessionModal(false);
                   setShowSKUSelector(true);
                 }}>
