@@ -181,6 +181,34 @@ export default function MasterSKUs() {
     setShowAddDialog(true);
   };
 
+  // Download Sample Template
+  const handleDownloadTemplate = () => {
+    const sampleData = [
+      {
+        "Master SKU": "SAMPLE-SKU-001",
+        "Product Name": "Sample Product 1",
+        "Marketplace": "flipkart",
+        "Alias Type": "fsn",
+        "Alias Value": "SHOF123ABC",
+        "Marketplace SKU": "MKT-SKU-12345",
+      },
+      {
+        "Master SKU": "SAMPLE-SKU-002",
+        "Product Name": "Sample Product 2",
+        "Marketplace": "amazon",
+        "Alias Type": "asin",
+        "Alias Value": "B07XYZ1234",
+        "Marketplace SKU": "AMZ-SKU-67890",
+      },
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(sampleData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "SKU Aliases Template");
+    XLSX.writeFile(wb, "sku_aliases_import_template.xlsx");
+    toast({ title: "Template downloaded successfully" });
+  };
+
   // Excel Export
   const handleExport = () => {
     const exportData = aliases.map(alias => ({
@@ -303,6 +331,10 @@ export default function MasterSKUs() {
           <Button onClick={handleExport} variant="outline">
             <Download className="mr-2 h-4 w-4" />
             Export
+          </Button>
+          <Button onClick={handleDownloadTemplate} variant="outline">
+            <Download className="mr-2 h-4 w-4" />
+            Download Template
           </Button>
           <label htmlFor="import-file">
             <Button asChild variant="outline">
