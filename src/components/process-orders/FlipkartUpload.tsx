@@ -6,6 +6,7 @@ import { Upload, FileText, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import * as pdfjsLib from "pdfjs-dist";
+import { extractQuantityFromItems, TextItem } from "@/lib/pdfParser";
 
 // Configure PDF.js worker - use unpkg for better Vite compatibility
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -96,9 +97,10 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       
       const productLines: ParsedOrder[] = [];
       
-      // Group text items into lines based on Y coordinate
+      // Group text items into lines based on Y coordinate using positional data
       const yTolerance = 4;
-      const lines = text_items.reduce((acc, item) => {
+      const items = (text_items as TextItem[]) || [];
+      const lines = items.reduce((acc, item) => {
         const existingLine = acc.find(line => Math.abs(line.y - item.y) < yTolerance);
         if (existingLine) {
           existingLine.items.push(item);
@@ -106,7 +108,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
           acc.push({ y: item.y, items: [item] });
         }
         return acc;
-      }, [] as Array<{ y: number; items: typeof text_items }>);
+      }, [] as Array<{ y: number; items: TextItem[] }>);
       
       // Sort lines by Y (top to bottom) and items within lines by X (left to right)
       lines.sort((a, b) => b.y - a.y);
@@ -114,160 +116,77 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       
       console.log(`Grouped into ${lines.length} lines`);
       
-      // Find header row containing SKU and QTY columns
-      let headerLineIndex = -1;
-      let skuColumnX: number | null = null;
-      let qtyColumnX: number | null = null;
+      // Layout-agnostic row parsing: scan every visual line for SKU patterns
+      const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
+      const debugLines: ParsedPage["parsed_lines"] = [];
       
       for (let i = 0; i < lines.length; i++) {
-        const lineText = lines[i].items.map(item => item.str).join(' ');
-        if (/SKU/i.test(lineText) && /QTY/i.test(lineText)) {
-          headerLineIndex = i;
-          
-          // Find column X positions
-          const skuItem = lines[i].items.find(item => /SKU/i.test(item.str));
-          const qtyItem = lines[i].items.find(item => /QTY/i.test(item.str));
-          
-          if (skuItem) skuColumnX = skuItem.x;
-          if (qtyItem) qtyColumnX = qtyItem.x;
-          
-          console.log(`Found header at line ${i}, SKU col X: ${skuColumnX}, QTY col X: ${qtyColumnX}`);
-          break;
+        const lineItems = lines[i].items;
+        const lineText = lineItems.map(item => item.str).join(' ');
+        
+        // Skip obvious non-product lines
+        if (/SKU\s*ID|Product\s+Description|Qty\s+Amount|IMEI\/SrNo|Handling\s+Fee|TOTAL/i.test(lineText)) {
+          console.log(`Row ${i}: Skipping header/summary row, lineText = ${lineText}`);
+          continue;
         }
-      }
-      
-      // Extract product rows (all rows after header that contain data)
-      if (headerLineIndex >= 0 && skuColumnX !== null && qtyColumnX !== null) {
-        const xTolerance = 30;
-        const wrapTolerance = 14;
         
-        console.log(`Processing data rows starting from line ${headerLineIndex + 1}`);
+        const skuMatches = lineText.match(/[A-Z]{3,}(?:-[A-Z0-9]+){2,}/g);
+        if (!skuMatches) {
+          continue;
+        }
         
-        // Process all data rows after header
-        for (let i = headerLineIndex + 1; i < lines.length; i++) {
-          const currentLine = lines[i];
-          const nextLine = i + 1 < lines.length ? lines[i + 1] : null;
-          
-          // Extract SKU from column
-          const skuItems = currentLine.items.filter(item => 
-            Math.abs(item.x - skuColumnX!) < xTolerance
-          );
-          
-          // Check if SKU might be wrapped to next line
-          if (nextLine && Math.abs(nextLine.y - currentLine.y) < wrapTolerance) {
-            const wrappedSkuItems = nextLine.items.filter(item => 
-              Math.abs(item.x - skuColumnX!) < xTolerance
-            );
-            skuItems.push(...wrappedSkuItems);
-          }
-          
-          // Assemble SKU (preserve hyphens and join fragments)
-          let sku = skuItems.map(item => item.str.trim()).join('').replace(/\s+/g, '');
-          
-          console.log(`Row ${i}: Raw SKU tokens = ${skuItems.map(s => s.str).join('|')}, Assembled = ${sku}`);
-          
-          // Validate SKU pattern
-          const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
+        for (const skuRaw of skuMatches) {
+          const sku = skuRaw.replace(/\s+/g, '').trim();
           if (!skuPattern.test(sku)) {
-            // Check if this line is actually a product description or other data
-            const lineText = currentLine.items.map(item => item.str).join(' ');
-            console.log(`Row ${i}: SKU validation failed, lineText = ${lineText}`);
-            if (!/Lango|Product|Description|TOTAL|Handling|Price/i.test(lineText)) {
-              continue;
-            }
+            console.log(`Row ${i}: Candidate SKU "${sku}" failed strict pattern check`);
             continue;
           }
           
-          // Extract quantity from column
-          const qtyItems = currentLine.items.filter(item => 
-            Math.abs(item.x - qtyColumnX!) < xTolerance
-          );
+          console.log(`Row ${i}: Found SKU candidate ${sku} in line: ${lineText}`);
           
-          if (nextLine && Math.abs(nextLine.y - currentLine.y) < wrapTolerance) {
-            const wrappedQtyItems = nextLine.items.filter(item => 
-              Math.abs(item.x - qtyColumnX!) < xTolerance
-            );
-            qtyItems.push(...wrappedQtyItems);
-          }
+          // Use robust quantity extractor based on positional items
+          const quantityResult = extractQuantityFromItems(items, lineItems[0].y, 5);
+          const quantity = quantityResult.qty || 1;
           
-          const qtyText = qtyItems.map(item => item.str.trim()).join('');
-          const quantity = parseInt(qtyText) || 1;
+          // Derive product name by removing SKU and obvious qty fragments
+          const nameText = lineText
+            .replace(skuRaw, '')
+            .replace(/Qty[:\s]*\d+/i, '')
+            .replace(/Quantity[:\s]*\d+/i, '')
+            .replace(/\b\d+\b/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const productName = nameText || 'Unknown Product';
           
-          // Extract product name (items between SKU and QTY columns)
-          const nameItems = currentLine.items.filter(item => 
-            item.x > (skuColumnX! + xTolerance) && item.x < (qtyColumnX! - xTolerance)
-          );
-          const productName = nameItems.map(item => item.str).join(' ').trim() || 'Unknown Product';
-          
-          // Build raw line for debugging
-          const raw_line = currentLine.items.map(item => item.str).join(' ');
-          
-          console.log(`Row ${i}: SKU=${sku}, QTY=${quantity}, Name=${productName}`);
+          const raw_line = lineText;
           
           productLines.push({
             orderId: orderContext.orderId || `FLP-${Date.now()}-${productLines.length}`,
             invoiceNumber: orderContext.invoiceNumber || `INV-${Date.now()}`,
             invoiceDate: orderContext.invoiceDate,
             trackingId: orderContext.trackingId || '',
-            sku: sku,
-            productName: productName,
-            quantity: quantity,
+            sku,
+            productName,
+            quantity,
             amount: 0,
             paymentType: orderContext.paymentType
           });
-        }
-      } else {
-        console.log('Header not found or columns not detected, trying fallback regex...');
-      }
-      
-      // Fallback: Use regex patterns if positional parsing fails
-      if (productLines.length === 0) {
-        console.log('Positional parsing found no products, falling back to regex...');
-        const processedSkus = new Set<string>();
-        
-        // Pattern: | SKU-WITH-DASHES | ... | number |
-        const tablePattern = /\|\s*([A-Z]{3,}(?:-[A-Z0-9]+){2,})\s*\|[^|]*\|\s*(\d+)\s*\|/gi;
-        let match;
-        
-        while ((match = tablePattern.exec(raw_text)) !== null) {
-          const sku = match[1].trim();
-          const quantity = parseInt(match[2]);
           
-          if (!processedSkus.has(sku)) {
-            processedSkus.add(sku);
-            
-            const matchPos = match.index;
-            const afterMatch = raw_text.substring(matchPos, matchPos + 300);
-            const nameMatch = afterMatch.match(/\|\s*([A-Za-z][^|]{10,}?)\s*\|/);
-            const productName = nameMatch ? nameMatch[1].trim().split(/\s{2,}/)[0] : 'Unknown Product';
-            
-            console.log(`Fallback regex found: SKU=${sku}, QTY=${quantity}`);
-            
-            productLines.push({
-              orderId: orderContext.orderId || `FLP-${Date.now()}-${productLines.length}`,
-              invoiceNumber: orderContext.invoiceNumber || `INV-${Date.now()}`,
-              invoiceDate: orderContext.invoiceDate,
-              trackingId: orderContext.trackingId || '',
-              sku: sku,
-              productName: productName,
-              quantity: quantity,
-              amount: 0,
-              paymentType: orderContext.paymentType
-            });
-          }
+          debugLines.push({
+            sku,
+            quantity,
+            productName,
+            raw_line,
+            row_index: i,
+            qty_source: quantityResult.source
+          });
         }
       }
       
       console.log(`=== PAGE ${page_number} COMPLETE: Found ${productLines.length} product(s) ===`);
       
       // Store parsed_lines in parsedPage for debug JSON
-      parsedPage.parsed_lines = productLines.map(p => ({
-        sku: p.sku,
-        quantity: p.quantity,
-        productName: p.productName,
-        raw_line: `${p.sku} | ${p.productName} | ${p.quantity}`,
-        qty_source: 'column'
-      }));
+      parsedPage.parsed_lines = debugLines;
       
       return productLines;
       
