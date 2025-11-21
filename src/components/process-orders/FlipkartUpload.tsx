@@ -310,28 +310,28 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         const storagePath = await uploadToStorage(file);
         
         // Extract order-level context from first page
-        const firstPageText = parsedPages[0]?.raw_text || '';
-        
-        const orderIdMatch = firstPageText.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || firstPageText.match(/OD\d{15,}/i);
-        const orderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[0]) : '';
-
-        const invoiceMatch = firstPageText.match(/Invoice\s*No[:\s]+([A-Z0-9]+)/i);
-        const invoiceNumber = invoiceMatch ? invoiceMatch[1] : '';
-
-        const dateMatch = firstPageText.match(/Invoice\s*Date[:\s]+(\d{1,2}-\d{1,2}-\d{4})/i);
-        const invoiceDate = dateMatch ? convertDateFormat(dateMatch[1]) : new Date().toISOString().split('T')[0];
-
-        const trackingMatch = firstPageText.match(/AWB\s*No\.?\s*\(N\)[:\s]+([A-Z0-9]+)/i) || 
-                             firstPageText.match(/AWB[:\s]+([A-Z0-9]+)/i);
-        const trackingId = trackingMatch ? trackingMatch[1] : '';
-
-        const paymentType = firstPageText.match(/COD|Cash\s+on\s+Delivery/i) ? 'COD' : 'Prepaid';
-        
-        const orderContext = { orderId, invoiceNumber, invoiceDate, trackingId, paymentType };
-        
         // Parse each page - each page may contain MULTIPLE products
         for (let pageNum = 0; pageNum < parsedPages.length; pageNum++) {
           const parsedPage = parsedPages[pageNum];
+          const pageText = parsedPage.raw_text || '';
+
+          // Extract order-level context PER PAGE so each order is counted correctly
+          const orderIdMatch = pageText.match(/Order\s*Id[:\s]+(OD\d{15,})/i) || pageText.match(/OD\d{15,}/i);
+          const orderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[0]) : '';
+
+          const invoiceMatch = pageText.match(/Invoice\s*No[:\s]+([A-Z0-9]+)/i);
+          const invoiceNumber = invoiceMatch ? invoiceMatch[1] : '';
+
+          const dateMatch = pageText.match(/Invoice\s*Date[:\s]+(\d{1,2}-\d{1,2}-\d{4})/i);
+          const invoiceDate = dateMatch ? convertDateFormat(dateMatch[1]) : new Date().toISOString().split('T')[0];
+
+          const trackingMatch = pageText.match(/AWB\s*No\.?\s*\(N\)[:\s]+([A-Z0-9]+)/i) || 
+                               pageText.match(/AWB[:\s]+([A-Z0-9]+)/i);
+          const trackingId = trackingMatch ? trackingMatch[1] : '';
+
+          const paymentType = pageText.match(/COD|Cash\s+on\s+Delivery/i) ? 'COD' : 'Prepaid';
+          
+          const orderContext = { orderId, invoiceNumber, invoiceDate, trackingId, paymentType };
           
           try {
             // Parse ALL product lines from this page
