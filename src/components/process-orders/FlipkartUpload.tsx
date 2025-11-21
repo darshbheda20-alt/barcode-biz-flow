@@ -120,9 +120,24 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
       const debugLines: ParsedPage["parsed_lines"] = [];
       
+      // Detect Tax Invoice section to avoid duplicates
+      let inTaxInvoiceSection = false;
+      
       for (let i = 0; i < lines.length; i++) {
         const lineItems = lines[i].items;
         const lineText = lineItems.map(item => item.str).join(' ');
+        
+        // Mark when we enter Tax Invoice section
+        if (/TAX\s+INVOICE|INVOICE\s+DETAILS|BILL\s+TO/i.test(lineText)) {
+          console.log(`Row ${i}: Entering Tax Invoice section - will skip product extraction from here`);
+          inTaxInvoiceSection = true;
+          continue;
+        }
+        
+        // Skip if we're in Tax Invoice section (to avoid duplicates)
+        if (inTaxInvoiceSection) {
+          continue;
+        }
         
         // Skip obvious non-product lines
         if (/SKU\s*ID|Product\s+Description|Qty\s+Amount|IMEI\/SrNo|Handling\s+Fee|TOTAL/i.test(lineText)) {
