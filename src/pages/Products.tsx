@@ -221,6 +221,30 @@ export default function Products() {
     }
   };
 
+  const handleExport = () => {
+    const exportData = products.map(product => ({
+      'Name': product.name,
+      'Brand': product.brand,
+      'Master SKU': product.master_sku,
+      'Color': product.color || '',
+      'Brand Size': product.brand_size || '',
+      'Standard Size': product.standard_size || '',
+      'Barcode': product.barcode || '',
+      'MRP': product.mrp,
+      'Cost Price': product.cost_price,
+      'Reorder Level': product.reorder_level,
+      'Vendor Name': product.vendor_name,
+      'Available Units': product.available_units,
+      'Damaged Units': product.damaged_units,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Products');
+    XLSX.writeFile(workbook, `products_export_${new Date().toISOString().split('T')[0]}.xlsx`);
+    toast.success('Products exported successfully!');
+  };
+
   const handleDownloadTemplate = () => {
     const template = [
       {
@@ -364,6 +388,10 @@ export default function Products() {
                 </div>
                 
                 {/* Desktop buttons */}
+                <Button variant="outline" size="sm" onClick={handleExport} className="hidden md:flex">
+                  <Download className="mr-2 h-4 w-4" />
+                  Export Products
+                </Button>
                 <Button variant="outline" size="sm" onClick={handleDownloadTemplate} className="hidden md:flex">
                   <Download className="mr-2 h-4 w-4" />
                   Download Template
