@@ -120,27 +120,22 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
       const debugLines: ParsedPage["parsed_lines"] = [];
       
-      // Detect Tax Invoice section to avoid duplicates
-      let inTaxInvoiceSection = false;
+      // Detect Tax Invoice section to avoid duplicates - stop parsing once we hit it
+      let shouldStopParsing = false;
       
       for (let i = 0; i < lines.length; i++) {
         const lineItems = lines[i].items;
         const lineText = lineItems.map(item => item.str).join(' ');
         
-        // Mark when we enter Tax Invoice section
-        if (/TAX\s+INVOICE|INVOICE\s+DETAILS|BILL\s+TO/i.test(lineText)) {
-          console.log(`Row ${i}: Entering Tax Invoice section - will skip product extraction from here`);
-          inTaxInvoiceSection = true;
-          continue;
-        }
-        
-        // Skip if we're in Tax Invoice section (to avoid duplicates)
-        if (inTaxInvoiceSection) {
-          continue;
+        // Stop parsing when we reach Tax Invoice section (bottom half of page)
+        if (/TAX\s+INVOICE|INVOICE\s+DETAILS|Invoice\s+Date|Billing\s+Address/i.test(lineText)) {
+          console.log(`Row ${i}: Reached Tax Invoice section at "${lineText.substring(0, 50)}" - stopping product extraction for this page`);
+          shouldStopParsing = true;
+          break;
         }
         
         // Skip obvious non-product lines
-        if (/SKU\s*ID|Product\s+Description|Qty\s+Amount|IMEI\/SrNo|Handling\s+Fee|TOTAL/i.test(lineText)) {
+        if (/SKU\s*ID|Product\s+Description|Qty\s+Amount|IMEI\/SrNo|Handling\s+Fee|TOTAL|Shipped\s+by/i.test(lineText)) {
           console.log(`Row ${i}: Skipping header/summary row, lineText = ${lineText}`);
           continue;
         }
