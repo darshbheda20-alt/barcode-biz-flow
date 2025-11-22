@@ -5,6 +5,18 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const normalizeSku = (raw: string | null): string => {
+  if (!raw) return '';
+  let s = raw.toUpperCase();
+  // Remove punctuation except spaces and hyphens
+  s = s.replace(/[^A-Z0-9\- ]+/g, '');
+  // Collapse multiple spaces/hyphens to a single hyphen
+  s = s.replace(/[\s\-]+/g, '-');
+  // Trim leading/trailing hyphens
+  s = s.replace(/^-+|-+$/g, '');
+  return s;
+};
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -37,74 +49,123 @@ Deno.serve(async (req) => {
 
     if (!unmappedOrders || unmappedOrders.length === 0) {
       return new Response(
-        JSON.stringify({ 
-          success: true, 
+        JSON.stringify({
+          success: true,
           message: 'No unmapped orders found',
-          remapped_count: 0 
+          remapped_count: 0,
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // Preload aliases and products for normalized, case-insensitive matching
+    const { data: aliasRows, error: aliasError } = await supabase
+      .from('sku_aliases')
+      .select('id, product_id, alias_value, marketplace');
+
+    if (aliasError) {
+      console.error('[Reprocess Mapping] Alias fetch error:', aliasError);
+    }
+
+    const { data: productRows, error: productError } = await supabase
+      .from('products')
+      .select('id, master_sku, barcode');
+
+    if (productError) {
+      console.error('[Reprocess Mapping] Product fetch error:', productError);
+    }
+
     let remappedCount = 0;
-    const remappedOrders = [];
+    const remappedOrders: Array<{
+      order_id: string;
+      marketplace_sku: string | null;
+      master_sku: string | null;
+      mapping_source: string;
+    }> = [];
 
     for (const order of unmappedOrders) {
-      const marketplaceSku = order.marketplace_sku;
-      console.log(`[Reprocess Mapping] Attempting to map: ${marketplaceSku}`);
+      const rawSku = order.marketplace_sku as string | null;
+      const normalizedSku = normalizeSku(rawSku);
 
-      let productId = null;
-      let masterSku = null;
-      let mappingSource = null;
-
-      // Step 1: Try exact alias match
-      const { data: aliasMatch } = await supabase
-        .from('sku_aliases')
-        .select('product_id, products(master_sku)')
-        .eq('alias_value', marketplaceSku)
-        .eq('marketplace', order.platform)
-        .single();
-
-      if (aliasMatch) {
-        productId = aliasMatch.product_id;
-        masterSku = (aliasMatch.products as any)?.master_sku;
-        mappingSource = 'alias_exact';
-        console.log(`[Reprocess Mapping] Alias match found: ${masterSku}`);
+      if (!normalizedSku) {
+        console.log(`[Reprocess Mapping] Skipping order ${order.id} with empty marketplace_sku`);
+        continue;
       }
 
-      // Step 2: Try exact master_sku match
-      if (!productId) {
-        const { data: productMatch } = await supabase
-          .from('products')
-          .select('id, master_sku')
-          .eq('master_sku', marketplaceSku)
-          .single();
+      console.log(
+        `[Reprocess Mapping] Attempting normalized mapping for order ${order.id}: ${rawSku} → ${normalizedSku}`
+      );
 
-        if (productMatch) {
-          productId = productMatch.id;
-          masterSku = productMatch.master_sku;
-          mappingSource = 'master_sku_exact';
-          console.log(`[Reprocess Mapping] Master SKU match found: ${masterSku}`);
+      let productId: string | null = null;
+      let masterSku: string | null = null;
+      let mappingSource = '';
+
+      // Step 1: Try normalized match in sku_aliases (by marketplace)
+      const aliasCandidates = (aliasRows || []).filter((row: any) =>
+        row.marketplace === order.platform &&
+        normalizeSku(row.alias_value as string | null) === normalizedSku
+      );
+
+      if (aliasCandidates.length === 1) {
+        const match = aliasCandidates[0];
+        productId = match.product_id as string | null;
+        const productFromAlias = (productRows || []).find(
+          (p: any) => p.id === productId
+        );
+        masterSku = productFromAlias ? (productFromAlias.master_sku as string) : null;
+        mappingSource = 'alias_normalized_exact';
+        console.log(
+          `[Reprocess Mapping] Alias match found for ${normalizedSku}: ${masterSku} (product ${productId})`
+        );
+      } else if (aliasCandidates.length > 1) {
+        console.log(
+          `[Reprocess Mapping] Multiple alias matches for ${normalizedSku}; leaving unmapped to avoid ambiguity`
+        );
+      }
+
+      // Step 2: Try normalized master_sku match
+      if (!productId) {
+        const masterCandidates = (productRows || []).filter(
+          (row: any) => normalizeSku(row.master_sku as string | null) === normalizedSku
+        );
+
+        if (masterCandidates.length === 1) {
+          const match = masterCandidates[0];
+          productId = match.id as string;
+          masterSku = match.master_sku as string;
+          mappingSource = 'master_sku_normalized_exact';
+          console.log(
+            `[Reprocess Mapping] Master SKU match found for ${normalizedSku}: ${masterSku} (product ${productId})`
+          );
+        } else if (masterCandidates.length > 1) {
+          console.log(
+            `[Reprocess Mapping] Multiple master_sku matches for ${normalizedSku}; leaving unmapped`
+          );
         }
       }
 
-      // Step 3: Try barcode match (fallback)
+      // Step 3: Try normalized barcode match (fallback)
       if (!productId) {
-        const { data: barcodeMatch } = await supabase
-          .from('products')
-          .select('id, master_sku')
-          .eq('barcode', marketplaceSku)
-          .single();
+        const barcodeCandidates = (productRows || []).filter(
+          (row: any) => normalizeSku(row.barcode as string | null) === normalizedSku
+        );
 
-        if (barcodeMatch) {
-          productId = barcodeMatch.id;
-          masterSku = barcodeMatch.master_sku;
-          mappingSource = 'barcode_exact';
-          console.log(`[Reprocess Mapping] Barcode match found: ${masterSku}`);
+        if (barcodeCandidates.length === 1) {
+          const match = barcodeCandidates[0];
+          productId = match.id as string;
+          masterSku = match.master_sku as string;
+          mappingSource = 'barcode_normalized_exact';
+          console.log(
+            `[Reprocess Mapping] Barcode match found for ${normalizedSku}: ${masterSku} (product ${productId})`
+          );
+        } else if (barcodeCandidates.length > 1) {
+          console.log(
+            `[Reprocess Mapping] Multiple barcode matches for ${normalizedSku}; leaving unmapped`
+          );
         }
       }
 
-      // Update the order if we found a match
+      // Update the order if we found a single unambiguous match
       if (productId && masterSku) {
         const { error: updateError } = await supabase
           .from('process_orders')
@@ -121,18 +182,24 @@ Deno.serve(async (req) => {
           remappedCount++;
           remappedOrders.push({
             order_id: order.order_id,
-            marketplace_sku: marketplaceSku,
+            marketplace_sku: rawSku,
             master_sku: masterSku,
-            mapping_source: mappingSource,
+            mapping_source: 'reprocess_retry',
           });
-          console.log(`[Reprocess Mapping] ✓ Remapped ${marketplaceSku} → ${masterSku} (${mappingSource})`);
+          console.log(
+            `[Reprocess Mapping] ✓ Remapped ${rawSku} → ${masterSku} (source=${mappingSource})`
+          );
         }
       } else {
-        console.log(`[Reprocess Mapping] ✗ No match found for ${marketplaceSku}`);
+        console.log(
+          `[Reprocess Mapping] ✗ No normalized match found for ${rawSku} (${normalizedSku}); remains unmapped`
+        );
       }
     }
 
-    console.log(`[Reprocess Mapping] Complete. Remapped ${remappedCount} of ${unmappedOrders.length} orders`);
+    console.log(
+      `[Reprocess Mapping] Complete. Remapped ${remappedCount} of ${unmappedOrders.length} orders`
+    );
 
     return new Response(
       JSON.stringify({
@@ -148,7 +215,9 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error('[Reprocess Mapping] Error:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
