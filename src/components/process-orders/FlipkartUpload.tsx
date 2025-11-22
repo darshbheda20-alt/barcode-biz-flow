@@ -32,6 +32,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ file: string; status: 'success' | 'error'; message: string }[]>([]);
   const [debugData, setDebugData] = useState<{ fileName: string; pages: ParsedPage[] }[] | null>(null);
+  const [lastUploadedFile, setLastUploadedFile] = useState<string | null>(null);
+  const [isRemapping, setIsRemapping] = useState(false);
   const { toast } = useToast();
 
   const convertDateFormat = (dateStr: string): string => {
@@ -459,6 +461,48 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     });
   };
 
+  const handleRemapOrders = async () => {
+    if (!lastUploadedFile) {
+      toast({
+        title: "No file to remap",
+        description: "Please upload a file first",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsRemapping(true);
+    console.log('[Remap] Starting remapping for:', lastUploadedFile);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('reprocess-mapping', {
+        body: { uploaded_file_path: lastUploadedFile },
+      });
+
+      if (error) throw error;
+
+      console.log('[Remap] Results:', data);
+      
+      toast({
+        title: "Remapping Complete",
+        description: `Successfully remapped ${data.remapped_count} of ${data.total_unmapped} unmapped order(s)`,
+      });
+      
+      // Refresh the picklist view
+      onOrdersParsed([]);
+      
+    } catch (error) {
+      console.error('[Remap] Error:', error);
+      toast({
+        title: "Remapping Failed",
+        description: error instanceof Error ? error.message : "Failed to remap orders",
+        variant: "destructive"
+      });
+    } finally {
+      setIsRemapping(false);
+    }
+  };
+
   const handleUpload = async () => {
     if (!files || files.length === 0) {
       toast({
@@ -486,6 +530,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         
         // Upload file to storage once
         const storagePath = await uploadToStorage(file);
+        setLastUploadedFile(storagePath);
         
         // Extract order-level context from first page
         // Parse each page - each page may contain MULTIPLE products
@@ -685,14 +730,25 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold">Upload Status:</h4>
               {debugData && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={downloadDebugJSON}
-                  className="text-xs"
-                >
-                  Download Debug JSON
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={downloadDebugJSON}
+                    className="text-xs"
+                  >
+                    Download Debug JSON
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleRemapOrders}
+                    disabled={isRemapping || !lastUploadedFile}
+                    className="text-xs"
+                  >
+                    {isRemapping ? "Remapping..." : "Re-run Mapping"}
+                  </Button>
+                </div>
               )}
             </div>
             {uploadStatus.map((status, idx) => (
