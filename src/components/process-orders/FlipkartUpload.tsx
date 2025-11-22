@@ -58,6 +58,8 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     parsed_lines: Array<{
       sku: string;
       sku_cell_text: string;
+      sku_normalized: string;
+      seller_sku_assembled: string;
       sku_valid: boolean;
       sku_pattern_matched: string;
       quantity: number;
@@ -66,9 +68,24 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       raw_line: string;
       row_index?: number;
       qty_source: string;
-      source: 'pdfjs' | 'ocr' | 'fallback_regex';
+      source: "pdfjs" | "ocr" | "fallback_regex";
+      column_xranges?: Array<{ column: string; minX: number; maxX: number }>;
+      page_number?: number;
+      permissive_capture?: boolean;
     }>;
   }
+
+  const normalizeSku = (raw: string): string => {
+    if (!raw) return "";
+    let s = raw.toUpperCase();
+    // Remove punctuation except spaces and hyphens
+    s = s.replace(/[^A-Z0-9\- ]+/g, "");
+    // Collapse multiple spaces/hyphens to a single hyphen
+    s = s.replace(/[\s\-]+/g, "-");
+    // Trim leading/trailing hyphens
+    s = s.replace(/^-+|-+$/g, "");
+    return s;
+  };
 
   const extractTextFromPDF = async (file: File): Promise<ParsedPage[]> => {
     const arrayBuffer = await file.arrayBuffer();
@@ -78,46 +95,55 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      
+
       // Preserve positional information
       const text_items = textContent.items.map((item: any) => ({
         str: item.str,
         x: item.transform[4],
         y: item.transform[5],
         width: item.width,
-        height: item.height
+        height: item.height,
       }));
-      
-      const raw_text = text_items.map(item => item.str).join(' ');
-      
+
+      const raw_text = text_items.map((item: any) => item.str).join(" ");
+
       pages.push({
         page_number: i,
         raw_text,
         text_items,
-        parsed_lines: []
+        parsed_lines: [],
       });
     }
 
     return pages;
   };
 
-  const parseFlipkartPage = (parsedPage: ParsedPage, orderContext: { orderId: string; invoiceNumber: string; invoiceDate: string; trackingId: string; paymentType: string }): ParsedOrder[] => {
+  const parseFlipkartPage = (
+    parsedPage: ParsedPage,
+    orderContext: {
+      orderId: string;
+      invoiceNumber: string;
+      invoiceDate: string;
+      trackingId: string;
+      paymentType: string;
+    }
+  ): ParsedOrder[] => {
     try {
-      const { page_number, raw_text, text_items } = parsedPage;
+      const { page_number, text_items } = parsedPage;
       console.log(`=== PARSING PAGE ${page_number} (STRICT COLUMN-BASED) ===`);
-      console.log('Text items count:', text_items.length);
-      
+      const items = (text_items as TextItem[]) || [];
+      console.log("Text items count:", items.length);
+
       const productLines: ParsedOrder[] = [];
       const debugLines: ParsedPage["parsed_lines"] = [];
-      
-      // Blacklist tokens that should never be treated as SKUs
-      const blacklistTokens = ['AWB', 'WB', 'FMPC', 'FMPP', 'Order', 'Not', 'Printed', 'Resale', 'Invoice'];
-      
+
+      // Tokens that often appear outside the SKU table (AWB box, headers, etc.)
+      const blacklistTokens = ["AWB", "WB", "FMPC", "FMPP", "Order", "Not", "Printed", "Resale", "Invoice"];
+
       // Group text items into lines based on Y coordinate
       const yTolerance = 5;
-      const items = (text_items as TextItem[]) || [];
       const lines = items.reduce((acc, item) => {
-        const existingLine = acc.find(line => Math.abs(line.y - item.y) < yTolerance);
+        const existingLine = acc.find((line) => Math.abs(line.y - item.y) < yTolerance);
         if (existingLine) {
           existingLine.items.push(item);
         } else {
@@ -125,245 +151,228 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         }
         return acc;
       }, [] as Array<{ y: number; items: TextItem[] }>);
-      
+
       lines.sort((a, b) => b.y - a.y);
-      lines.forEach(line => line.items.sort((a, b) => a.x - b.x));
-      
+      lines.forEach((line) => line.items.sort((a, b) => a.x - b.x));
+
       console.log(`Grouped into ${lines.length} lines`);
-      
+
       // STEP 1: Detect header row and compute column X-ranges
       let headerRowIndex = -1;
       let columnXRanges: Array<{ column: string; minX: number; maxX: number }> = [];
-      
+
       for (let i = 0; i < Math.min(15, lines.length); i++) {
         const lineItems = lines[i].items;
-        const lineText = lineItems.map(item => item.str).join(' ').toLowerCase();
-        
+        const lineText = lineItems.map((item) => item.str).join(" ").toLowerCase();
+
         // Look for header keywords
         if (/sku|product|description|qty|quantity|amount/.test(lineText)) {
           console.log(`Found header row at line ${i}: ${lineText}`);
           headerRowIndex = i;
-          
+
           // Extract column positions from header
           const sortedByX = [...lineItems].sort((a, b) => a.x - b.x);
-          
+
           for (let j = 0; j < sortedByX.length; j++) {
             const item = sortedByX[j];
             const itemText = item.str.toLowerCase();
-            
+
             // Define column ranges with tolerance
             const minX = item.x - 20;
             const maxX = item.x + item.width + 100; // Extended range for wrapped text
-            
+
             if (/sku|seller.*sku/i.test(itemText)) {
-              columnXRanges.push({ column: 'SKU', minX, maxX });
+              columnXRanges.push({ column: "SKU", minX, maxX });
               console.log(`SKU column range: ${minX} - ${maxX}`);
             } else if (/qty|quantity/i.test(itemText)) {
-              columnXRanges.push({ column: 'QTY', minX, maxX });
+              columnXRanges.push({ column: "QTY", minX, maxX });
               console.log(`QTY column range: ${minX} - ${maxX}`);
             } else if (/product|description/i.test(itemText)) {
-              columnXRanges.push({ column: 'PRODUCT', minX, maxX });
+              columnXRanges.push({ column: "PRODUCT", minX, maxX });
             }
           }
-          
+
           parsedPage.detected_headers = {
             header_row_index: i,
-            header_text: lineText
+            header_text: lineText,
           };
           parsedPage.column_xranges = columnXRanges;
-          
+
           break;
         }
       }
-      
+
       if (headerRowIndex === -1 || columnXRanges.length === 0) {
-        console.warn('⚠️  No header row detected - falling back to heuristic parsing');
-        // Fallback: use heuristic column detection based on typical positions
-        // This will still use positional info but without explicit header anchoring
+        console.warn("⚠️  No header row detected - falling back to heuristic parsing");
       }
-      
-      const skuColumnRange = columnXRanges.find(col => col.column === 'SKU');
-      const qtyColumnRange = columnXRanges.find(col => col.column === 'QTY');
-      
+
+      const skuColumnRange = columnXRanges.find((col) => col.column === "SKU");
+      const qtyColumnRange = columnXRanges.find((col) => col.column === "QTY");
+
       // STEP 2: Parse data rows (start after header)
       const dataStartIdx = headerRowIndex > 0 ? headerRowIndex + 1 : 0;
-      let shouldStopParsing = false;
-      
+
       for (let i = dataStartIdx; i < lines.length; i++) {
         const lineItems = lines[i].items;
-        const lineText = lineItems.map(item => item.str).join(' ');
-        
+        const lineText = lineItems.map((item) => item.str).join(" ");
+
         // Stop at Tax Invoice section
         if (/TAX\s+INVOICE|INVOICE\s+DETAILS|Invoice\s+Date|Billing\s+Address/i.test(lineText)) {
           console.log(`Row ${i}: Reached Tax Invoice section - stopping`);
-          shouldStopParsing = true;
           break;
         }
-        
+
         // Skip obvious non-product rows
         if (/SKU\s*ID|Handling\s+Fee|TOTAL|Shipped\s+by|IMEI|Sr\.?\s*No/i.test(lineText)) {
           continue;
         }
-        
-        // STEP 3: Extract SKU ONLY from SKU column x-range
-        let skuCellText = '';
-        let skuTokens: string[] = [];
-        
+
+        // Text outside the SKU column, used only for blacklist tagging
+        let outsideSkuText = "";
         if (skuColumnRange) {
-          // Get all items in SKU column range for this row
-          const skuItems = lineItems.filter(item => 
-            item.x >= skuColumnRange.minX && item.x <= skuColumnRange.maxX
+          const outsideSkuItems = lineItems.filter(
+            (item) => item.x < skuColumnRange.minX || item.x > skuColumnRange.maxX
           );
-          
-          skuCellText = skuItems.map(item => item.str).join('').trim();
-          skuTokens = skuCellText.split(/\s+/).filter(t => t.length > 0);
-        } else {
-          // Fallback: look for SKU-like patterns anywhere
-          const matches = lineText.match(/[A-Z]{3,}(?:-[A-Z0-9]+){2,}/g);
-          if (matches) {
-            skuTokens = matches;
-            skuCellText = matches.join(' ');
+          outsideSkuText = outsideSkuItems.map((item) => item.str).join(" ");
+        }
+        const isBlacklistedOutside = blacklistTokens.some((bl) =>
+          outsideSkuText.toUpperCase().includes(bl.toUpperCase())
+        );
+
+        // STEP 3: Assemble full SKU cell text from SKU column range
+        let skuCellText = "";
+        if (skuColumnRange) {
+          const skuItems = lineItems.filter(
+            (item) => item.x >= skuColumnRange.minX && item.x <= skuColumnRange.maxX
+          );
+          skuCellText = skuItems.map((item) => item.str).join(" ").trim();
+        }
+
+        const skuCellNormalized = normalizeSku(skuCellText);
+        const vendorPrefixTokenRegex = /\b(LANGO|LGO|LC|LNGO|L-)\b/i;
+        const hasVendorPrefixToken = vendorPrefixTokenRegex.test(skuCellText);
+        const genericPattern = /^[A-Z0-9]+-[A-Z0-9\-]*\d{2,}$/;
+
+        // STEP 4: Extract quantity from QTY column (or fallbacks)
+        let quantity = 0;
+        let qtyCellText = "";
+        let qtySource: string = "none";
+
+        if (qtyColumnRange) {
+          const qtyItems = lineItems.filter(
+            (item) => item.x >= qtyColumnRange.minX && item.x <= qtyColumnRange.maxX
+          );
+          qtyCellText = qtyItems.map((item) => item.str).join(" ").trim();
+
+          const qtyMatch = qtyCellText.match(/\d{1,2}/);
+          if (qtyMatch) {
+            quantity = parseInt(qtyMatch[0], 10);
+            qtySource = "column";
           }
         }
-        
-        if (skuTokens.length === 0) continue;
-        
-        // STEP 4: Validate each SKU token with STRICT patterns
-        for (const skuRaw of skuTokens) {
-          const sku = skuRaw.replace(/\s+/g, '').trim().toUpperCase();
-          
-          // Check blacklist
-          if (blacklistTokens.some(bl => sku.includes(bl.toUpperCase()))) {
-            console.log(`Row ${i}: SKU "${sku}" contains blacklisted token - rejecting`);
-            continue;
-          }
-          
-          // Strict validation patterns
-          const genericPattern = /^[A-Z0-9]+-[A-Z0-9\-]*\d{2,}$/;  // requires digits
-          const vendorPattern = /\b(LANGO|LGO|LC|LNGO|L-A|L-)\-[A-Z0-9\-]{4,}\b/i; // allowed vendor prefixes
-          
-          let skuValid = false;
-          let matchedPattern = '';
-          
-          // If SKU matches known vendor prefix pattern, accept even without digits
-          if (vendorPattern.test(sku)) {
-            skuValid = true;
-            matchedPattern = 'vendor_prefix';
-          } else {
-            // For generic pattern, require at least one digit to avoid GUL-GUL-GUL type noise
-            if (!/\d/.test(sku)) {
-              console.log(`Row ${i}: SKU "${sku}" rejected - no digits (e.g., GUL-GUL-GUL)`);
-              debugLines.push({
-                sku: sku,
-                sku_cell_text: skuCellText,
-                sku_valid: false,
-                sku_pattern_matched: 'NONE - no digits',
-                quantity: 0,
-                qty_cell_text: '',
-                productName: '',
-                raw_line: lineText,
-                row_index: i,
-                qty_source: 'none',
-                source: 'pdfjs'
-              });
-              continue;
-            }
-            
-            if (genericPattern.test(sku)) {
-              skuValid = true;
-              matchedPattern = 'generic_numeric';
-            }
-          }
-          
-          if (!skuValid) {
-            console.log(`Row ${i}: SKU "${sku}" failed pattern validation`);
-            debugLines.push({
-              sku: sku,
-              sku_cell_text: skuCellText,
-              sku_valid: false,
-              sku_pattern_matched: 'NONE - pattern mismatch',
-              quantity: 0,
-              qty_cell_text: '',
-              productName: '',
-              raw_line: lineText,
-              row_index: i,
-              qty_source: 'none',
-              source: 'pdfjs'
-            });
-            continue;
-          }
-          
-          console.log(`Row ${i}: ✓ Valid SKU "${sku}" (pattern: ${matchedPattern})`);
-          
-          // STEP 5: Extract quantity from QTY column
-          let quantity = 1;
-          let qtyCellText = '';
-          let qtySource = 'guessed';
-          
-          if (qtyColumnRange) {
-            const qtyItems = lineItems.filter(item =>
-              item.x >= qtyColumnRange.minX && item.x <= qtyColumnRange.maxX
-            );
-            qtyCellText = qtyItems.map(item => item.str).join(' ').trim();
-            
-            const qtyMatch = qtyCellText.match(/\d{1,2}/);
-            if (qtyMatch) {
-              quantity = parseInt(qtyMatch[0]);
-              qtySource = 'column';
-            }
-          } else {
-            // Fallback: use positional quantity extractor
-            const quantityResult = extractQuantityFromItems(items, lineItems[0].y, 5);
+
+        if (!quantity && lineItems.length > 0) {
+          const quantityResult = extractQuantityFromItems(items, lineItems[0].y, 5);
+          if (quantityResult.qty > 0) {
             quantity = quantityResult.qty;
             qtySource = quantityResult.source;
             qtyCellText = quantity.toString();
           }
-          
-          // Extract product name
-          const nameText = lineText
-            .replace(sku, '')
-            .replace(/Qty[:\s]*\d+/i, '')
-            .replace(/Quantity[:\s]*\d+/i, '')
-            .replace(/\b\d+\b/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-          const productName = nameText || 'Unknown Product';
-          
-          productLines.push({
-            orderId: orderContext.orderId || `FLP-${Date.now()}-${productLines.length}`,
-            invoiceNumber: orderContext.invoiceNumber || `INV-${Date.now()}`,
-            invoiceDate: orderContext.invoiceDate,
-            trackingId: orderContext.trackingId || '',
-            sku,
-            productName,
-            quantity,
-            amount: 0,
-            paymentType: orderContext.paymentType
+        }
+
+        // STEP 5: Determine SKU tokens within the cell (for multi-SKU rows)
+        const tokens = skuCellNormalized ? skuCellNormalized.split(/\s+/).filter(Boolean) : [];
+        const tokenResults: { sku: string; skuValid: boolean; pattern: string }[] = [];
+
+        if (hasVendorPrefixToken && skuCellNormalized) {
+          // Vendor-prefixed cell: treat the whole assembled cell as the seller SKU
+          tokenResults.push({
+            sku: skuCellNormalized,
+            skuValid: true,
+            pattern: "vendor_prefix_token",
           });
-          
-          debugLines.push({
-            sku,
+        } else if (tokens.length > 0) {
+          for (const token of tokens) {
+            const isValid = genericPattern.test(token);
+            tokenResults.push({
+              sku: token,
+              skuValid: isValid,
+              pattern: isValid ? "generic_numeric" : "NONE - pattern mismatch",
+            });
+          }
+        } else {
+          // No detectable SKU tokens in the cell; still emit a parsed line for QA
+          tokenResults.push({
+            sku: "",
+            skuValid: false,
+            pattern: "NONE - empty_sku_cell",
+          });
+        }
+
+        // Derive product name from the full line (excluding SKU/Qty/obvious numbers)
+        const nameText = lineText
+          .replace(skuCellText, "")
+          .replace(/Qty[:\s]*\d+/i, "")
+          .replace(/Quantity[:\s]*\d+/i, "")
+          .replace(/\b\d+\b/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        const productName = nameText || "Unknown Product";
+
+        // STEP 6: Emit parsed_lines for EVERY table row / token
+        for (const result of tokenResults) {
+          const parsedSku = result.sku;
+          const normalizedForLine = normalizeSku(parsedSku || skuCellText);
+
+          const debugEntry = {
+            sku: parsedSku,
             sku_cell_text: skuCellText,
-            sku_valid: true,
-            sku_pattern_matched: matchedPattern,
+            sku_normalized: normalizedForLine,
+            seller_sku_assembled: parsedSku || skuCellNormalized,
+            sku_valid: !!parsedSku && result.skuValid && !isBlacklistedOutside,
+            sku_pattern_matched: result.pattern,
             quantity,
             qty_cell_text: qtyCellText,
             productName,
             raw_line: lineText,
             row_index: i,
             qty_source: qtySource,
-            source: 'pdfjs'
-          });
+            source: "pdfjs" as const,
+            column_xranges: columnXRanges,
+            page_number,
+            permissive_capture: false,
+          };
+
+          debugLines.push(debugEntry);
+
+          const canCreateProductLine =
+            debugEntry.sku_valid && !!debugEntry.sku && quantity > 0;
+
+          if (canCreateProductLine) {
+            productLines.push({
+              orderId:
+                orderContext.orderId || `FLP-${Date.now()}-${productLines.length}`,
+              invoiceNumber: orderContext.invoiceNumber || `INV-${Date.now()}`,
+              invoiceDate: orderContext.invoiceDate,
+              trackingId: orderContext.trackingId || "",
+              sku: debugEntry.sku,
+              productName,
+              quantity,
+              amount: 0,
+              paymentType: orderContext.paymentType,
+            });
+          }
         }
       }
-      
-      console.log(`=== PAGE ${page_number} COMPLETE: ${productLines.length} valid product(s) ===`);
+
+      console.log(
+        `=== PAGE ${page_number} COMPLETE: ${productLines.length} valid product(s) ===`
+      );
       parsedPage.parsed_lines = debugLines;
-      
+
       return productLines;
-      
     } catch (error) {
-      console.error('Error parsing page:', error);
+      console.error("Error parsing page:", error);
       return [];
     }
   };
