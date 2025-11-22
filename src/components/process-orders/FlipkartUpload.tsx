@@ -117,9 +117,10 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
       console.log(`Grouped into ${lines.length} lines`);
       
       // Layout-agnostic row parsing: scan every visual line for SKU patterns
-      const skuPattern = /^[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
+      // Require at least one digit to avoid invalid SKUs like "GUL-GUL-GUL" that are not real products
+      const skuPattern = /^(?=.*\d)[A-Z]{3,}(?:-[A-Z0-9]+){2,}$/;
       const debugLines: ParsedPage["parsed_lines"] = [];
-      
+
       // Detect Tax Invoice section to avoid duplicates - stop parsing once we hit it
       let shouldStopParsing = false;
       
