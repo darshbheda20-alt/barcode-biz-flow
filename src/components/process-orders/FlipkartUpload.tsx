@@ -216,7 +216,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
         const lineItems = lines[i].items;
         const lineText = lineItems.map((item) => item.str).join(" ");
 
-        // Stop at Tax Invoice section
+        // Stop at Tax Invoice section (labels are always above this)
         if (/TAX\s+INVOICE|INVOICE\s+DETAILS|Invoice\s+Date|Billing\s+Address/i.test(lineText)) {
           console.log(`Row ${i}: Reached Tax Invoice section - stopping`);
           break;
@@ -227,33 +227,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
           continue;
         }
 
-        // Text outside the SKU column, used only for blacklist tagging
-        let outsideSkuText = "";
-        if (skuColumnRange) {
-          const outsideSkuItems = lineItems.filter(
-            (item) => item.x < skuColumnRange.minX || item.x > skuColumnRange.maxX
-          );
-          outsideSkuText = outsideSkuItems.map((item) => item.str).join(" ");
-        }
-        const isBlacklistedOutside = blacklistTokens.some((bl) =>
-          outsideSkuText.toUpperCase().includes(bl.toUpperCase())
-        );
-
-        // STEP 3: Assemble full SKU cell text from SKU column range
-        let skuCellText = "";
-        if (skuColumnRange) {
-          const skuItems = lineItems.filter(
-            (item) => item.x >= skuColumnRange.minX && item.x <= skuColumnRange.maxX
-          );
-          skuCellText = skuItems.map((item) => item.str).join(" ").trim();
-        }
-
-        const skuCellNormalized = normalizeSku(skuCellText);
-        const vendorPrefixTokenRegex = /\b(LANGO|LGO|LC|LNGO|L-)\b/i;
-        const hasVendorPrefixToken = vendorPrefixTokenRegex.test(skuCellText);
-        const genericPattern = /^[A-Z0-9]+-[A-Z0-9\-]*\d{2,}$/;
-
-        // STEP 4: Extract quantity from QTY column (or fallbacks)
+        // --- Quantity extraction (common for both column and fallback modes) ---
         let quantity = 0;
         let qtyCellText = "";
         let qtySource: string = "none";
@@ -280,33 +254,113 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
           }
         }
 
-        // STEP 5: Determine SKU tokens within the cell (for multi-SKU rows)
-        const tokens = skuCellNormalized ? skuCellNormalized.split(/\s+/).filter(Boolean) : [];
-        const tokenResults: { sku: string; skuValid: boolean; pattern: string }[] = [];
+        // --- SKU extraction ---
+        let skuCellText = "";
+        let isBlacklistedOutside = false;
+        const tokenResults: { sku: string; skuValid: boolean; pattern: string; permissive: boolean }[] = [];
 
-        if (hasVendorPrefixToken && skuCellNormalized) {
-          // Vendor-prefixed cell: treat the whole assembled cell as the seller SKU
-          tokenResults.push({
-            sku: skuCellNormalized,
-            skuValid: true,
-            pattern: "vendor_prefix_token",
-          });
-        } else if (tokens.length > 0) {
-          for (const token of tokens) {
-            const isValid = genericPattern.test(token);
+        if (skuColumnRange) {
+          // COLUMN-FIRST MODE: use only the SKU column band
+          const outsideSkuItems = lineItems.filter(
+            (item) => item.x < skuColumnRange.minX || item.x > skuColumnRange.maxX
+          );
+          const outsideSkuText = outsideSkuItems.map((item) => item.str).join(" ");
+          isBlacklistedOutside = blacklistTokens.some((bl) =>
+            outsideSkuText.toUpperCase().includes(bl.toUpperCase())
+          );
+
+          const skuItems = lineItems.filter(
+            (item) => item.x >= skuColumnRange.minX && item.x <= skuColumnRange.maxX
+          );
+          skuCellText = skuItems.map((item) => item.str).join(" ").trim();
+
+          const skuCellNormalized = normalizeSku(skuCellText);
+          const vendorPrefixTokenRegex = /\b(LANGO|LGO|LC|LNGO|L-)\b/i;
+          const hasVendorPrefixToken = vendorPrefixTokenRegex.test(skuCellText);
+          const genericPattern = /^[A-Z0-9]+-[A-Z0-9\-]*\d{2,}$/;
+
+          const tokens = skuCellNormalized ? skuCellNormalized.split(/\s+/).filter(Boolean) : [];
+
+          if (hasVendorPrefixToken && skuCellNormalized) {
+            // Vendor-prefixed cell: treat the whole assembled cell as the seller SKU
             tokenResults.push({
-              sku: token,
-              skuValid: isValid,
-              pattern: isValid ? "generic_numeric" : "NONE - pattern mismatch",
+              sku: skuCellNormalized,
+              skuValid: true,
+              pattern: "vendor_prefix_token",
+              permissive: false,
+            });
+          } else if (tokens.length > 0) {
+            for (const token of tokens) {
+              const isValid = genericPattern.test(token);
+              tokenResults.push({
+                sku: token,
+                skuValid: isValid,
+                pattern: isValid ? "generic_numeric" : "NONE - pattern mismatch",
+                permissive: false,
+              });
+            }
+          } else {
+            // No detectable SKU tokens in the cell; still emit a parsed line for QA
+            tokenResults.push({
+              sku: "",
+              skuValid: false,
+              pattern: "NONE - empty_sku_cell",
+              permissive: false,
             });
           }
         } else {
-          // No detectable SKU tokens in the cell; still emit a parsed line for QA
-          tokenResults.push({
-            sku: "",
-            skuValid: false,
-            pattern: "NONE - empty_sku_cell",
-          });
+          // HEURISTIC FALLBACK MODE: no header/column detected.
+          // Capture any vendor-prefixed or generic SKU-like tokens anywhere on the line.
+          const upperLine = lineText.toUpperCase();
+          const seen = new Set<string>();
+
+          const vendorFullRegex = /\b(?:LANGO|LGO|LC|LNGO|L-)[A-Z0-9\-]{4,}\b/g;
+          const genericRegex = /[A-Z0-9]{3,}(?:-[A-Z0-9]+){2,}/g;
+
+          let match: RegExpExecArray | null;
+          while ((match = vendorFullRegex.exec(upperLine)) !== null) {
+            const raw = match[0];
+            if (!seen.has(raw)) {
+              seen.add(raw);
+              const norm = normalizeSku(raw);
+              tokenResults.push({
+                sku: norm,
+                skuValid: true,
+                pattern: "vendor_prefix_token_fallback",
+                permissive: true,
+              });
+            }
+          }
+
+          while ((match = genericRegex.exec(upperLine)) !== null) {
+            const raw = match[0];
+            if (!seen.has(raw)) {
+              seen.add(raw);
+              const norm = normalizeSku(raw);
+              const hasDigit = /\d/.test(norm);
+              const isValid = hasDigit;
+              tokenResults.push({
+                sku: norm,
+                skuValid: isValid,
+                pattern: isValid
+                  ? "generic_numeric_fallback"
+                  : "NONE - pattern_mismatch_fallback",
+                permissive: true,
+              });
+            }
+          }
+
+          if (tokenResults.length === 0) {
+            tokenResults.push({
+              sku: "",
+              skuValid: false,
+              pattern: "NONE - no_sku_match_fallback",
+              permissive: true,
+            });
+          }
+
+          const assembledFromTokens = Array.from(seen.values()).join(" ");
+          skuCellText = assembledFromTokens || lineText;
         }
 
         // Derive product name from the full line (excluding SKU/Qty/obvious numbers)
@@ -328,7 +382,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             sku: parsedSku,
             sku_cell_text: skuCellText,
             sku_normalized: normalizedForLine,
-            seller_sku_assembled: parsedSku || skuCellNormalized,
+            seller_sku_assembled: parsedSku || normalizeSku(skuCellText),
             sku_valid: !!parsedSku && result.skuValid && !isBlacklistedOutside,
             sku_pattern_matched: result.pattern,
             quantity,
@@ -340,7 +394,7 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
             source: "pdfjs" as const,
             column_xranges: columnXRanges,
             page_number,
-            permissive_capture: false,
+            permissive_capture: result.permissive,
           };
 
           debugLines.push(debugEntry);
