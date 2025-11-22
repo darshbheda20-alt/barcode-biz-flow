@@ -239,38 +239,39 @@ export const FlipkartUpload = ({ onOrdersParsed }: FlipkartUploadProps) => {
           }
           
           // Strict validation patterns
-          const vendorPatterns = [
-            /^[A-Z0-9]+-[A-Z0-9\-]*\d{2,}$/,  // Pattern with digits at end
-            /\b(LANGO|LGO|LC|LNGO|L-A|L-)\-[A-Z0-9\-]{4,}\b/i  // Vendor prefixes
-          ];
+          const genericPattern = /^[A-Z0-9]+-[A-Z0-9\-]*\d{2,}$/;  // requires digits
+          const vendorPattern = /\b(LANGO|LGO|LC|LNGO|L-A|L-)\-[A-Z0-9\-]{4,}\b/i; // allowed vendor prefixes
           
           let skuValid = false;
           let matchedPattern = '';
           
-          // Must contain at least one digit
-          if (!/\d/.test(sku)) {
-            console.log(`Row ${i}: SKU "${sku}" rejected - no digits (e.g., GUL-GUL-GUL)`);
-            debugLines.push({
-              sku: sku,
-              sku_cell_text: skuCellText,
-              sku_valid: false,
-              sku_pattern_matched: 'NONE - no digits',
-              quantity: 0,
-              qty_cell_text: '',
-              productName: '',
-              raw_line: lineText,
-              row_index: i,
-              qty_source: 'none',
-              source: 'pdfjs'
-            });
-            continue;
-          }
-          
-          for (const pattern of vendorPatterns) {
-            if (pattern.test(sku)) {
+          // If SKU matches known vendor prefix pattern, accept even without digits
+          if (vendorPattern.test(sku)) {
+            skuValid = true;
+            matchedPattern = 'vendor_prefix';
+          } else {
+            // For generic pattern, require at least one digit to avoid GUL-GUL-GUL type noise
+            if (!/\d/.test(sku)) {
+              console.log(`Row ${i}: SKU "${sku}" rejected - no digits (e.g., GUL-GUL-GUL)`);
+              debugLines.push({
+                sku: sku,
+                sku_cell_text: skuCellText,
+                sku_valid: false,
+                sku_pattern_matched: 'NONE - no digits',
+                quantity: 0,
+                qty_cell_text: '',
+                productName: '',
+                raw_line: lineText,
+                row_index: i,
+                qty_source: 'none',
+                source: 'pdfjs'
+              });
+              continue;
+            }
+            
+            if (genericPattern.test(sku)) {
               skuValid = true;
-              matchedPattern = pattern.toString();
-              break;
+              matchedPattern = 'generic_numeric';
             }
           }
           
