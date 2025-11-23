@@ -15,6 +15,7 @@ import Users from "./pages/Users";
 import MasterSKUs from "./pages/MasterSKUs";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import { PackingInterface } from "./components/process-orders/PackingInterface";
 
 const queryClient = new QueryClient();
 
@@ -31,6 +32,7 @@ const App = () => (
           <Route path="/products" element={<ProtectedRoute><Products /></ProtectedRoute>} />
           <Route path="/scan" element={<ProtectedRoute><ScanLog /></ProtectedRoute>} />
           <Route path="/process-orders" element={<ProtectedRoute><ProcessOrders /></ProtectedRoute>} />
+          <Route path="/process-orders/pack/:id" element={<ProtectedRoute><PackingInterface /></ProtectedRoute>} />
           <Route path="/sales-orders" element={<ProtectedRoute><SalesOrders /></ProtectedRoute>} />
           <Route path="/purchase-orders" element={<ProtectedRoute><PurchaseOrders /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />

@@ -7,6 +7,8 @@ import { AmazonUpload } from "@/components/process-orders/AmazonUpload";
 import { MyntraUpload } from "@/components/process-orders/MyntraUpload";
 import { PicklistView } from "@/components/process-orders/PicklistView";
 import { UnmappedSKUs } from "@/components/process-orders/UnmappedSKUs";
+import { OrderPackingList } from "@/components/process-orders/OrderPackingList";
+import { CropAndPrintQueue } from "@/components/process-orders/CropAndPrintQueue";
 
 export default function ProcessOrders() {
   const [activeTab, setActiveTab] = useState("picklist");
@@ -67,121 +69,57 @@ export default function ProcessOrders() {
         </TabsContent>
 
         <TabsContent value="print" className="space-y-4">
+          <CropAndPrintQueue />
+          
           <Card>
             <CardHeader>
-              <CardTitle>Crop & Print Labels and Invoices</CardTitle>
-              <CardDescription>
-                Automatically crop and print documents via QZ Tray
-              </CardDescription>
+              <CardTitle>Platform-Specific Instructions</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-6">
-                <div className="grid gap-6 md:grid-cols-3">
-                  {/* Amazon Printing */}
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-lg">Amazon</CardTitle>
-                      <CardDescription>Print labels & invoices</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-sm text-muted-foreground">
-                        Labels → 4x6 Thermal | Invoices → A4
-                      </p>
-                      {/* Print controls will go here */}
-                    </CardContent>
-                  </Card>
-
-                  {/* Flipkart Printing */}
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-lg">Flipkart</CardTitle>
-                      <CardDescription>Crop & print combined PDFs</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-sm text-muted-foreground">
-                        Auto-split: Top half → Label | Bottom half → Invoice
-                      </p>
-                      {/* Print controls will go here */}
-                    </CardContent>
-                  </Card>
-
-                  {/* Myntra Printing */}
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-lg">Myntra</CardTitle>
-                      <CardDescription>Upload & print documents</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-sm text-muted-foreground">
-                        Upload labels and invoices per Master SKU, then print.
-                      </p>
-                      {/* Print controls will go here */}
-                    </CardContent>
-                  </Card>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="border rounded p-4">
+                  <h3 className="font-semibold mb-2">Flipkart</h3>
+                  <p className="text-sm text-muted-foreground">
+                    PDFs are automatically cropped into 4x6 labels and invoices
+                  </p>
                 </div>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Printing Queue</CardTitle>
-                    <CardDescription>Track printing status</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      Printing queue and status will appear here.
-                    </p>
-                    {/* Printing queue will go here */}
-                  </CardContent>
-                </Card>
+                <div className="border rounded p-4">
+                  <h3 className="font-semibold mb-2">Amazon</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Original PDFs attached without cropping
+                  </p>
+                </div>
+                <div className="border rounded p-4">
+                  <h3 className="font-semibold mb-2">Myntra</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Upload labels and invoices manually during packing
+                  </p>
+                </div>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="packaging" className="space-y-4">
+          <OrderPackingList />
+          
           <Card>
             <CardHeader>
-              <CardTitle>Order Packaging</CardTitle>
-              <CardDescription>
-                Scan and verify orders, deduct inventory, and mark as dispatched
-              </CardDescription>
+              <CardTitle>Packaging Instructions</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Ready for Packaging</CardTitle>
-                    <CardDescription>
-                      Orders with printed labels and invoices
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                      Scan tracking ID, product barcode, and verify Master SKU to complete packaging.
-                    </p>
-                    {/* Packaging interface will go here */}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Packaging Instructions</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <div className="text-sm space-y-1">
-                      <p className="font-semibold">For each order:</p>
-                      <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                        <li>Scan <strong>Tracking ID / Packet ID</strong></li>
-                        <li>Scan <strong>Tag ID</strong> (if applicable)</li>
-                        <li>Scan <strong>Product Barcode</strong></li>
-                        <li>Verify <strong>Master SKU</strong> matches the order</li>
-                        <li>Confirm to deduct inventory and mark as dispatched</li>
-                      </ol>
-                      <p className="text-xs italic mt-2">
-                        Note: If barcode matches multiple Master SKUs, manual confirmation is required.
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
+            <CardContent className="space-y-2">
+              <div className="text-sm space-y-1">
+                <p className="font-semibold">For each order:</p>
+                <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+                  <li>Click "Pack" on an order from the queue above</li>
+                  <li>Scan <strong>Product Barcode</strong> using camera or manual input</li>
+                  <li>If multiple products match, select the correct one</li>
+                  <li>System automatically deducts inventory</li>
+                  <li>Click "Complete Packing" to create Sales Order</li>
+                </ol>
+                <p className="text-xs italic mt-2 bg-blue-50 p-2 rounded">
+                  <strong>Apply to next scans:</strong> When scanning ambiguous barcodes, you can choose to auto-apply your selection for the next 5 scans to speed up packing.
+                </p>
               </div>
             </CardContent>
           </Card>

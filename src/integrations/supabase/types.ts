@@ -14,6 +14,170 @@ export type Database = {
   }
   public: {
     Tables: {
+      crop_queue: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          crop_metadata: Json | null
+          error_message: string | null
+          id: string
+          order_packing_ids: string[] | null
+          platform: string
+          source_file_path: string
+          status: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          crop_metadata?: Json | null
+          error_message?: string | null
+          id?: string
+          order_packing_ids?: string[] | null
+          platform: string
+          source_file_path: string
+          status?: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          crop_metadata?: Json | null
+          error_message?: string | null
+          id?: string
+          order_packing_ids?: string[] | null
+          platform?: string
+          source_file_path?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      order_packing: {
+        Row: {
+          created_at: string
+          id: string
+          invoice_file_path: string | null
+          label_file_path: string | null
+          marketplace_sku: string | null
+          master_sku: string | null
+          order_id: string
+          packed_at: string | null
+          packed_by: string | null
+          packet_id: string | null
+          platform: string
+          product_barcode: string | null
+          product_id: string | null
+          quantity_required: number
+          quantity_scanned: number
+          status: string
+          tag_barcode: string | null
+          updated_at: string
+          uploaded_file_path: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          invoice_file_path?: string | null
+          label_file_path?: string | null
+          marketplace_sku?: string | null
+          master_sku?: string | null
+          order_id: string
+          packed_at?: string | null
+          packed_by?: string | null
+          packet_id?: string | null
+          platform: string
+          product_barcode?: string | null
+          product_id?: string | null
+          quantity_required?: number
+          quantity_scanned?: number
+          status?: string
+          tag_barcode?: string | null
+          updated_at?: string
+          uploaded_file_path?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          invoice_file_path?: string | null
+          label_file_path?: string | null
+          marketplace_sku?: string | null
+          master_sku?: string | null
+          order_id?: string
+          packed_at?: string | null
+          packed_by?: string | null
+          packet_id?: string | null
+          platform?: string
+          product_barcode?: string | null
+          product_id?: string | null
+          quantity_required?: number
+          quantity_scanned?: number
+          status?: string
+          tag_barcode?: string | null
+          updated_at?: string
+          uploaded_file_path?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_packing_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      packing_scan_audit: {
+        Row: {
+          action: string
+          created_at: string
+          delta: number
+          id: string
+          order_packing_id: string
+          product_id: string | null
+          resolved_master_sku: string | null
+          scanned_barcode: string
+          source: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          delta?: number
+          id?: string
+          order_packing_id: string
+          product_id?: string | null
+          resolved_master_sku?: string | null
+          scanned_barcode: string
+          source?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          delta?: number
+          id?: string
+          order_packing_id?: string
+          product_id?: string | null
+          resolved_master_sku?: string | null
+          scanned_barcode?: string
+          source?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "packing_scan_audit_order_packing_id_fkey"
+            columns: ["order_packing_id"]
+            isOneToOne: false
+            referencedRelation: "order_packing"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "packing_scan_audit_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       printing_status: {
         Row: {
           created_at: string
@@ -215,34 +379,76 @@ export type Database = {
       }
       sales_orders: {
         Row: {
+          billing_address: string | null
+          buyer_name: string | null
           created_at: string
           id: string
+          invoice_data_missing: boolean | null
+          invoice_date: string | null
+          invoice_file_path: string | null
+          invoice_number: string | null
+          label_file_path: string | null
+          line_items: Json | null
+          marketplace_sku: string | null
+          master_sku: string | null
           order_id: string
+          packed_at: string | null
+          packed_by: string | null
           packet_id: string | null
           platform: string
           product_id: string
           quantity: number
           tag_id: string | null
+          total_invoice_value: number | null
+          total_tax: number | null
         }
         Insert: {
+          billing_address?: string | null
+          buyer_name?: string | null
           created_at?: string
           id?: string
+          invoice_data_missing?: boolean | null
+          invoice_date?: string | null
+          invoice_file_path?: string | null
+          invoice_number?: string | null
+          label_file_path?: string | null
+          line_items?: Json | null
+          marketplace_sku?: string | null
+          master_sku?: string | null
           order_id: string
+          packed_at?: string | null
+          packed_by?: string | null
           packet_id?: string | null
           platform: string
           product_id: string
           quantity: number
           tag_id?: string | null
+          total_invoice_value?: number | null
+          total_tax?: number | null
         }
         Update: {
+          billing_address?: string | null
+          buyer_name?: string | null
           created_at?: string
           id?: string
+          invoice_data_missing?: boolean | null
+          invoice_date?: string | null
+          invoice_file_path?: string | null
+          invoice_number?: string | null
+          label_file_path?: string | null
+          line_items?: Json | null
+          marketplace_sku?: string | null
+          master_sku?: string | null
           order_id?: string
+          packed_at?: string | null
+          packed_by?: string | null
           packet_id?: string | null
           platform?: string
           product_id?: string
           quantity?: number
           tag_id?: string | null
+          total_invoice_value?: number | null
+          total_tax?: number | null
         }
         Relationships: [
           {

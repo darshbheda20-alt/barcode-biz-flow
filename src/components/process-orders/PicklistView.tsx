@@ -277,6 +277,53 @@ export const PicklistView = () => {
     // Archive current picklist orders (not for historical views)
     if (!viewingHistorical) {
       try {
+        // Get all process_orders for current picklist
+        const { data: processOrders, error: fetchError } = await supabase
+          .from("process_orders")
+          .select("*")
+          .in("workflow_status", ["pending", "picklist_generated"]);
+
+        if (fetchError) throw fetchError;
+
+        // Create order-packing records
+        const orderPackingRecords = processOrders?.map(order => ({
+          order_id: order.order_id,
+          platform: order.platform.toLowerCase(),
+          marketplace_sku: order.marketplace_sku,
+          master_sku: order.master_sku,
+          product_id: order.product_id,
+          quantity_required: order.quantity,
+          uploaded_file_path: order.uploaded_file_path,
+          status: 'pending'
+        })) || [];
+
+        if (orderPackingRecords.length > 0) {
+          const { error: packingError } = await supabase
+            .from('order_packing')
+            .insert(orderPackingRecords);
+
+          if (packingError) throw packingError;
+        }
+
+        // Queue Flipkart PDFs for cropping
+        const flipkartOrders = processOrders?.filter(o => o.platform.toLowerCase() === 'flipkart') || [];
+        const uniqueFlipkartFiles = [...new Set(flipkartOrders.map(o => o.uploaded_file_path).filter(Boolean))];
+
+        for (const filePath of uniqueFlipkartFiles) {
+          const relatedOrderIds = flipkartOrders
+            .filter(o => o.uploaded_file_path === filePath)
+            .map(o => o.id);
+
+          await supabase
+            .from('crop_queue')
+            .insert({
+              source_file_path: filePath,
+              platform: 'flipkart',
+              status: 'queued',
+              order_packing_ids: relatedOrderIds
+            });
+        }
+
         const { error } = await supabase
           .from('process_orders')
           .update({ 
