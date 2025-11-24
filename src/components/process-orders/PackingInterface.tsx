@@ -59,6 +59,7 @@ export function PackingInterface() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [manualBarcode, setManualBarcode] = useState("");
+  const [packetId, setPacketId] = useState("");
   
   // Disambiguation state
   const [showDisambiguation, setShowDisambiguation] = useState(false);
@@ -371,6 +372,16 @@ export function PackingInterface() {
   const handleCompletePacking = async () => {
     if (!order) return;
 
+    // For Flipkart, require packet_id
+    if (order.platform === 'flipkart' && !packetId.trim()) {
+      toast({
+        title: "Missing Packet ID",
+        description: "Please scan or enter the Packet ID before completing packing",
+        variant: "destructive"
+      });
+      return;
+    }
+
     if (order.quantity_scanned !== order.quantity_required) {
       const shouldContinue = window.confirm(
         `Warning: Scanned ${order.quantity_scanned} but required ${order.quantity_required}. Continue?`
@@ -388,7 +399,8 @@ export function PackingInterface() {
         .update({
           status: 'packed',
           packed_by: user.id,
-          packed_at: new Date().toISOString()
+          packed_at: new Date().toISOString(),
+          packet_id: order.platform === 'flipkart' ? packetId : null
         })
         .eq('id', id);
 
@@ -488,10 +500,27 @@ export function PackingInterface() {
             </div>
           )}
 
+          {order.platform === 'flipkart' && (
+            <div className="bg-orange-50 border border-orange-200 rounded p-4 space-y-2">
+              <label className="text-sm font-medium">Packet ID (Required for Flipkart)</label>
+              <Input
+                placeholder="Scan or enter Packet ID"
+                value={packetId}
+                onChange={(e) => setPacketId(e.target.value)}
+                className="font-mono"
+              />
+            </div>
+          )}
+
           <div className="space-y-4">
-            <BarcodeScanner onScan={handleBarcodeScanned} />
+            <div>
+              <label className="text-sm font-medium mb-2 block">Product Barcode</label>
+              <BarcodeScanner onScan={handleBarcodeScanned} />
+            </div>
             
-            <div className="flex gap-2">
+            <div className="space-y-2">
+              <label className="text-sm text-muted-foreground">Or enter manually:</label>
+              <div className="flex gap-2">
               <Input
                 placeholder="Enter barcode manually"
                 value={manualBarcode}
@@ -514,6 +543,7 @@ export function PackingInterface() {
               >
                 Scan
               </Button>
+              </div>
             </div>
 
             <div className="flex gap-2">
