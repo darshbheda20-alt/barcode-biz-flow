@@ -3,9 +3,21 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Package, Loader2 } from "lucide-react";
+import { Package, Loader2, Download, Trash2, History, Archive } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 interface OrderPackingItem {
   id: string;
@@ -26,6 +38,7 @@ interface OrderPackingItem {
 export function OrderPackingList() {
   const [orders, setOrders] = useState<OrderPackingItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewingCompleted, setViewingCompleted] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -50,14 +63,23 @@ export function OrderPackingList() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [viewingCompleted]);
 
   const fetchOrders = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('order_packing')
         .select('*')
         .order('created_at', { ascending: false });
+
+      // Filter by status based on view mode
+      if (viewingCompleted) {
+        query = query.eq('status', 'packed');
+      } else {
+        query = query.neq('status', 'packed');
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setOrders(data || []);
@@ -71,6 +93,70 @@ export function OrderPackingList() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClearAll = async () => {
+    try {
+      const { error } = await supabase
+        .from('order_packing')
+        .delete()
+        .neq('status', 'packed');
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "Cleared all pending packing orders"
+      });
+
+      fetchOrders();
+    } catch (error) {
+      console.error('Error clearing orders:', error);
+      toast({
+        title: "Error",
+        description: "Failed to clear orders",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleExportCSV = () => {
+    if (orders.length === 0) {
+      toast({
+        title: "No Data",
+        description: "No orders to export"
+      });
+      return;
+    }
+
+    const csvContent = [
+      ['Order ID', 'Platform', 'Marketplace SKU', 'Master SKU', 'Qty Required', 'Qty Scanned', 'Status', 'Created At'].join(','),
+      ...orders.map(order => [
+        order.order_id,
+        order.platform,
+        order.marketplace_sku || '',
+        order.master_sku || '',
+        order.quantity_required,
+        order.quantity_scanned,
+        order.status,
+        format(new Date(order.created_at), 'yyyy-MM-dd HH:mm')
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `packing-orders-${viewingCompleted ? 'completed' : 'pending'}-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+
+    toast({
+      title: "Success",
+      description: "CSV exported successfully"
+    });
   };
 
   const getStatusBadge = (status: string) => {
@@ -91,23 +177,91 @@ export function OrderPackingList() {
     );
   }
 
+  useEffect(() => {
+    fetchOrders();
+  }, [viewingCompleted]);
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Order Packing Queue</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            {viewingCompleted ? <Archive className="h-5 w-5" /> : <Package className="h-5 w-5" />}
+            {viewingCompleted ? 'Completed Packing Orders' : 'Order Packing Queue'}
+          </CardTitle>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setViewingCompleted(!viewingCompleted)}
+            >
+              {viewingCompleted ? (
+                <>
+                  <Package className="h-4 w-4 mr-2" />
+                  View Pending
+                </>
+              ) : (
+                <>
+                  <History className="h-4 w-4 mr-2" />
+                  View Completed
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCSV}
+              disabled={orders.length === 0}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export CSV
+            </Button>
+            {!viewingCompleted && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={orders.length === 0}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Clear All
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear All Pending Orders?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently delete all pending packing orders from the queue. 
+                      Completed orders will not be affected. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleClearAll}>
+                      Clear All
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
           {orders.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">
-              No orders in packing queue. Export a picklist to create packing orders.
+              {viewingCompleted
+                ? 'No completed packing orders yet.'
+                : 'No orders in packing queue. Export a picklist to create packing orders.'}
             </p>
           ) : (
             orders.map((order) => (
               <div
                 key={order.id}
                 className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent cursor-pointer"
-                onClick={() => navigate(`/process-orders/pack/${order.id}`)}
+                onClick={() => !viewingCompleted && navigate(`/process-orders/pack/${order.id}`)}
               >
                 <div className="flex items-center gap-4">
                   <Package className="h-5 w-5 text-muted-foreground" />
@@ -116,6 +270,11 @@ export function OrderPackingList() {
                     <p className="text-sm text-muted-foreground">
                       {order.platform} • {order.master_sku || order.marketplace_sku}
                     </p>
+                    {viewingCompleted && (
+                      <p className="text-xs text-muted-foreground">
+                        Packed: {format(new Date(order.created_at), 'MMM dd, yyyy HH:mm')}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
@@ -123,7 +282,7 @@ export function OrderPackingList() {
                     {order.quantity_scanned} / {order.quantity_required}
                   </span>
                   {getStatusBadge(order.status)}
-                  <Button size="sm">Pack</Button>
+                  {!viewingCompleted && <Button size="sm">Pack</Button>}
                 </div>
               </div>
             ))
