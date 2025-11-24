@@ -313,6 +313,69 @@ export const PicklistView = () => {
           createdPackingRecords = packingData || [];
         }
 
+        // Create sales_orders records from parsed data
+        const salesOrderRecords = processOrders?.map(order => {
+          // Extract parsed invoice data if available
+          let invoiceData: any = {};
+          
+          // Try to parse stored JSON data if it exists
+          if (order.uploaded_file_path) {
+            // For now, use available fields from process_orders
+            // In future, parsed JSON should be stored and retrieved
+            invoiceData = {
+              line_items: order.product_name ? [{
+                description: order.product_name,
+                sku: order.marketplace_sku || order.master_sku,
+                qty: order.quantity,
+                rate: order.amount ? order.amount / order.quantity : 0,
+                taxable_value: order.amount || 0,
+                gst_rate: 0,
+                gst_amount: 0
+              }] : [],
+              subtotal: order.amount || 0,
+              tax_total: 0,
+              grand_total: order.amount || 0,
+              currency: '₹'
+            };
+          }
+
+          return {
+            order_id: order.order_id,
+            platform: order.platform,
+            marketplace_sku: order.marketplace_sku,
+            master_sku: order.master_sku,
+            product_id: order.product_id,
+            quantity: order.quantity,
+            invoice_number: order.invoice_number,
+            invoice_date: order.invoice_date,
+            invoice_file_path: order.uploaded_file_path,
+            line_items: invoiceData.line_items || null,
+            total_invoice_value: order.amount,
+            total_tax: 0,
+            invoice_data_missing: !order.invoice_number || !order.invoice_date,
+            packet_id: order.packet_id,
+            tag_id: order.tag_id
+          };
+        }) || [];
+
+        if (salesOrderRecords.length > 0) {
+          console.log('Creating sales_orders records:', salesOrderRecords);
+          const { data: salesData, error: salesError } = await supabase
+            .from('sales_orders')
+            .upsert(salesOrderRecords, { 
+              onConflict: 'order_id,platform',
+              ignoreDuplicates: false 
+            })
+            .select();
+
+          if (salesError) {
+            console.error('Error creating sales_orders:', salesError);
+            // Don't throw - this is non-critical
+          } else {
+            console.log('Created sales_orders records:', salesData);
+          }
+        }
+
         // Queue Flipkart PDFs for cropping using the correct order_packing IDs
         const flipkartOrders = processOrders?.filter(o => o.platform.toLowerCase() === 'flipkart') || [];
         const uniqueFlipkartFiles = [...new Set(flipkartOrders.map(o => o.uploaded_file_path).filter(Boolean))];
