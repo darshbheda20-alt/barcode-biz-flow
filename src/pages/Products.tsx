@@ -24,6 +24,7 @@ const productSchema = z.object({
   mrp: z.number().positive("MRP must be positive").finite("MRP must be a valid number"),
   cost_price: z.number().positive("Cost price must be positive").finite("Cost price must be a valid number"),
   reorder_level: z.number().int("Reorder level must be an integer").nonnegative("Reorder level cannot be negative"),
+  available_units: z.number().int("Available units must be an integer").nonnegative("Available units cannot be negative"),
   vendor_name: z.string().trim().min(1, "Vendor name is required").max(200, "Vendor name must be less than 200 characters"),
 });
 
@@ -63,6 +64,7 @@ export default function Products() {
     mrp: "",
     cost_price: "",
     reorder_level: "10",
+    available_units: "0",
     vendor_name: "",
   });
 
@@ -124,6 +126,7 @@ export default function Products() {
       mrp: "",
       cost_price: "",
       reorder_level: "10",
+      available_units: "0",
       vendor_name: "",
     });
     setIsDialogOpen(true);
@@ -144,6 +147,7 @@ export default function Products() {
         mrp: parseFloat(newProduct.mrp),
         cost_price: parseFloat(newProduct.cost_price),
         reorder_level: parseInt(newProduct.reorder_level),
+        available_units: parseInt(newProduct.available_units),
         vendor_name: newProduct.vendor_name,
       });
 
@@ -180,6 +184,7 @@ export default function Products() {
         mrp: editingProduct.mrp,
         cost_price: editingProduct.cost_price,
         reorder_level: editingProduct.reorder_level,
+        available_units: editingProduct.available_units,
         vendor_name: editingProduct.vendor_name,
       });
 
@@ -587,6 +592,17 @@ export default function Products() {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="new-available-units">Available Units *</Label>
+                  <Input
+                    id="new-available-units"
+                    type="number"
+                    required
+                    value={newProduct.available_units}
+                    onChange={(e) => setNewProduct({ ...newProduct, available_units: e.target.value })}
+                  />
+                </div>
+
                 <div className="space-y-2 md:col-span-2">
                   <Label htmlFor="new-vendor-name">Vendor Name *</Label>
                   <Input
@@ -739,6 +755,22 @@ export default function Products() {
                       setEditingProduct({
                         ...editingProduct,
                         reorder_level: parseInt(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="edit-available-units">Available Units *</Label>
+                  <Input
+                    id="edit-available-units"
+                    type="number"
+                    required
+                    value={editingProduct.available_units}
+                    onChange={(e) =>
+                      setEditingProduct({
+                        ...editingProduct,
+                        available_units: parseInt(e.target.value),
                       })
                     }
                   />
