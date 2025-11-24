@@ -443,14 +443,14 @@ export default function Products() {
                 >
                   <div className="flex-1">
                     <h3 className="font-semibold mb-1">{product.name}</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-muted-foreground">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-sm text-muted-foreground">
                       <span>Brand: {product.brand}</span>
                       <span>SKU: {product.master_sku}</span>
                       <span>Barcode: {product.barcode || 'N/A'}</span>
                       <span>Vendor: {product.vendor_name}</span>
                       <span>MRP: ₹{product.mrp}</span>
                       <span>Cost: ₹{product.cost_price}</span>
-                      <span>Available: {product.available_units}</span>
+                      <span className="font-medium text-foreground">Available: {product.available_units}</span>
                       <span>Reorder: {product.reorder_level}</span>
                     </div>
                   </div>
