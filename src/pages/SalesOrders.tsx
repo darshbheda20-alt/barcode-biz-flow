@@ -146,30 +146,40 @@ export default function SalesOrders() {
   const handleDownloadInvoice = async (order: SalesOrder) => {
     setDownloading(true);
     try {
-      if (order.invoice_file_path) {
-        const { data, error } = await supabase.storage
-          .from('order-documents')
-          .download(order.invoice_file_path);
-        
-        if (!error && data) {
-          const url = window.URL.createObjectURL(data);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `invoice-${order.order_id}.pdf`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          window.URL.revokeObjectURL(url);
-          toast({ title: "Success", description: "Invoice downloaded" });
-          return;
-        }
+      if (!order.invoice_file_path) {
+        toast({
+          title: "Error",
+          description: "No invoice file attached",
+          variant: "destructive"
+        });
+        return;
       }
 
-      toast({ 
-        title: "Not Available", 
-        description: "Invoice file not found in storage.",
-        variant: "destructive"
-      });
+      // Determine bucket based on path prefix
+      const invoicePath = order.invoice_file_path;
+      const bucket = invoicePath.startsWith('printed-invoices/') 
+        ? 'printed-invoices' 
+        : 'order-documents';
+      
+      // Remove bucket prefix if present
+      const filePath = invoicePath.replace(/^(printed-invoices|order-documents)\//, '');
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .download(filePath);
+        
+      if (error) throw error;
+
+      const url = window.URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${order.order_id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      
+      toast({ title: "Success", description: "Invoice downloaded" });
     } catch (error) {
       console.error('Error downloading invoice:', error);
       toast({
@@ -196,9 +206,15 @@ export default function SalesOrders() {
       for (const order of selectedOrdersList) {
         try {
           if (order.invoice_file_path) {
+            const invoicePath = order.invoice_file_path;
+            const bucket = invoicePath.startsWith('printed-invoices/') 
+              ? 'printed-invoices' 
+              : 'order-documents';
+            const filePath = invoicePath.replace(/^(printed-invoices|order-documents)\//, '');
+
             const { data, error } = await supabase.storage
-              .from('order-documents')
-              .download(order.invoice_file_path);
+              .from(bucket)
+              .download(filePath);
             
             if (!error && data) {
               invoiceBlobs.push({ orderId: order.order_id, blob: data });
