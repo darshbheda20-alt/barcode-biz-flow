@@ -177,10 +177,6 @@ export function OrderPackingList() {
     );
   }
 
-  useEffect(() => {
-    fetchOrders();
-  }, [viewingCompleted]);
-
   return (
     <Card>
       <CardHeader>
