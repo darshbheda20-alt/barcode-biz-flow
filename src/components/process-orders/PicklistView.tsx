@@ -298,30 +298,47 @@ export const PicklistView = () => {
         })) || [];
 
         if (orderPackingRecords.length > 0) {
-          const { error: packingError } = await supabase
+          console.log('Creating order packing records:', orderPackingRecords);
+          const { data: packingData, error: packingError } = await supabase
             .from('order_packing')
-            .insert(orderPackingRecords);
+            .insert(orderPackingRecords)
+            .select();
 
-          if (packingError) throw packingError;
+          if (packingError) {
+            console.error('Error creating order_packing:', packingError);
+            throw packingError;
+          }
+          console.log('Created order_packing records:', packingData);
         }
 
         // Queue Flipkart PDFs for cropping
         const flipkartOrders = processOrders?.filter(o => o.platform.toLowerCase() === 'flipkart') || [];
         const uniqueFlipkartFiles = [...new Set(flipkartOrders.map(o => o.uploaded_file_path).filter(Boolean))];
 
+        console.log('Flipkart files to crop:', uniqueFlipkartFiles);
+
         for (const filePath of uniqueFlipkartFiles) {
           const relatedOrderIds = flipkartOrders
             .filter(o => o.uploaded_file_path === filePath)
             .map(o => o.id);
 
-          await supabase
+          console.log('Queueing crop job for:', filePath, 'with order IDs:', relatedOrderIds);
+
+          const { data: cropData, error: cropError } = await supabase
             .from('crop_queue')
             .insert({
               source_file_path: filePath,
               platform: 'flipkart',
               status: 'queued',
               order_packing_ids: relatedOrderIds
-            });
+            })
+            .select();
+
+          if (cropError) {
+            console.error('Error creating crop_queue:', cropError);
+            throw cropError;
+          }
+          console.log('Created crop_queue entry:', cropData);
         }
 
         const { error } = await supabase
@@ -339,7 +356,7 @@ export const PicklistView = () => {
         
         toast({
           title: "Success",
-          description: "Picklist exported and archived"
+          description: `Picklist exported, ${orderPackingRecords.length} packing orders created`
         });
       } catch (error) {
         console.error('Error archiving picklist:', error);
