@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { DebugDownloader } from "./DebugDownloader";
 
 interface PicklistItem {
   masterSku: string;
@@ -295,7 +296,7 @@ export const PicklistView = () => {
           quantity_required: order.quantity,
           uploaded_file_path: order.uploaded_file_path,
           status: 'pending'
-        })) || [];
+        })).filter(r => r.platform) || [];
 
         let createdPackingRecords: any[] = [];
         if (orderPackingRecords.length > 0) {
@@ -488,6 +489,7 @@ export const PicklistView = () => {
             )}
           </div>
           <div className="flex gap-2">
+            <DebugDownloader />
             {viewingHistorical && (
               <Button
                 onClick={() => {

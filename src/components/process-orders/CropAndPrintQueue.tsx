@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import { Loader2, Download } from "lucide-react";
 import { cropFlipkartPdf } from "@/lib/pdfCropper";
+import { DebugDownloader } from "./DebugDownloader";
 
 interface CropQueueItem {
   id: string;
@@ -86,9 +87,10 @@ export function CropAndPrintQueue() {
         .eq('id', item.id);
 
       // Download the source PDF from storage
+      const filePath = item.source_file_path.replace(/^order-documents\//, '');
       const { data: fileData, error: downloadError } = await supabase.storage
         .from('order-documents')
-        .download(item.source_file_path);
+        .download(filePath);
 
       if (downloadError) throw downloadError;
 
@@ -225,7 +227,10 @@ export function CropAndPrintQueue() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Crop & Print Queue</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle>Crop & Print Queue</CardTitle>
+          <DebugDownloader />
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">

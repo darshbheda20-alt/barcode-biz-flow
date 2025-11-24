@@ -18,6 +18,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { DebugDownloader } from "./DebugDownloader";
 
 interface OrderPackingItem {
   id: string;
@@ -203,6 +204,7 @@ export function OrderPackingList() {
                 </>
               )}
             </Button>
+            <DebugDownloader />
             <Button
               variant="outline"
               size="sm"
