@@ -297,6 +297,7 @@ export const PicklistView = () => {
           status: 'pending'
         })) || [];
 
+        let createdPackingRecords: any[] = [];
         if (orderPackingRecords.length > 0) {
           console.log('Creating order packing records:', orderPackingRecords);
           const { data: packingData, error: packingError } = await supabase
@@ -309,20 +310,25 @@ export const PicklistView = () => {
             throw packingError;
           }
           console.log('Created order_packing records:', packingData);
+          createdPackingRecords = packingData || [];
         }
 
-        // Queue Flipkart PDFs for cropping
+        // Queue Flipkart PDFs for cropping using the correct order_packing IDs
         const flipkartOrders = processOrders?.filter(o => o.platform.toLowerCase() === 'flipkart') || [];
         const uniqueFlipkartFiles = [...new Set(flipkartOrders.map(o => o.uploaded_file_path).filter(Boolean))];
 
         console.log('Flipkart files to crop:', uniqueFlipkartFiles);
 
         for (const filePath of uniqueFlipkartFiles) {
-          const relatedOrderIds = flipkartOrders
-            .filter(o => o.uploaded_file_path === filePath)
-            .map(o => o.id);
+          // Get the order_packing IDs (not process_orders IDs) for this file
+          const relatedPackingIds = createdPackingRecords
+            .filter(p => {
+              const matchingProcessOrder = flipkartOrders.find(o => o.order_id === p.order_id);
+              return matchingProcessOrder?.uploaded_file_path === filePath;
+            })
+            .map(p => p.id);
 
-          console.log('Queueing crop job for:', filePath, 'with order IDs:', relatedOrderIds);
+          console.log('Queueing crop job for:', filePath, 'with order_packing IDs:', relatedPackingIds);
 
           const { data: cropData, error: cropError } = await supabase
             .from('crop_queue')
@@ -330,7 +336,7 @@ export const PicklistView = () => {
               source_file_path: filePath,
               platform: 'flipkart',
               status: 'queued',
-              order_packing_ids: relatedOrderIds
+              order_packing_ids: relatedPackingIds
             })
             .select();
 
