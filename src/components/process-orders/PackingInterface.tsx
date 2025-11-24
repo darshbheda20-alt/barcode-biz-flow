@@ -393,6 +393,14 @@ export function PackingInterface() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
+      // Fetch invoice data from process_orders
+      const { data: processOrderData } = await supabase
+        .from('process_orders')
+        .select('invoice_number, invoice_date, payment_type, amount, product_name')
+        .eq('order_id', order.order_id)
+        .eq('platform', order.platform)
+        .maybeSingle();
+
       // Update order_packing
       await supabase
         .from('order_packing')
@@ -404,7 +412,7 @@ export function PackingInterface() {
         })
         .eq('id', id);
 
-      // Create sales order
+      // Create sales order with complete invoice data
       await supabase
         .from('sales_orders')
         .insert({
@@ -416,8 +424,13 @@ export function PackingInterface() {
           quantity: order.quantity_scanned,
           label_file_path: order.label_file_path,
           invoice_file_path: order.invoice_file_path,
+          packet_id: order.platform === 'flipkart' ? packetId : null,
           packed_by: user.id,
-          packed_at: new Date().toISOString()
+          packed_at: new Date().toISOString(),
+          // Include invoice data from process_orders
+          invoice_number: processOrderData?.invoice_number,
+          invoice_date: processOrderData?.invoice_date,
+          total_invoice_value: processOrderData?.amount || 0
         });
 
       toast({
