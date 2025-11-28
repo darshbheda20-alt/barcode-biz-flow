@@ -3,24 +3,33 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Search, Package, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Search, Package, AlertCircle, List, LayoutGrid } from "lucide-react";
 
 interface Product {
   id: string;
   name: string;
   brand: string;
   master_sku: string;
+  color: string | null;
+  brand_size: string | null;
+  standard_size: string | null;
   barcode: string;
+  mrp: number;
   available_units: number;
   damaged_units: number;
   reorder_level: number;
   cost_price: number;
+  vendor_name: string;
 }
+
+type ViewMode = "list" | "grouped";
 
 export default function Inventory() {
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
 
   useEffect(() => {
     fetchProducts();
@@ -140,19 +149,41 @@ export default function Inventory() {
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
               <CardTitle>All Products</CardTitle>
               <CardDescription>Search and view all inventory items</CardDescription>
             </div>
-            <div className="relative w-64">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search products..."
-                className="pl-8"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+              <div className="flex border rounded-lg overflow-hidden">
+                <Button
+                  variant={viewMode === "list" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("list")}
+                  className="rounded-none"
+                >
+                  <List className="h-4 w-4 mr-1" />
+                  List
+                </Button>
+                <Button
+                  variant={viewMode === "grouped" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("grouped")}
+                  className="rounded-none"
+                >
+                  <LayoutGrid className="h-4 w-4 mr-1" />
+                  Grouped
+                </Button>
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search products..."
+                  className="pl-8"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -164,12 +195,14 @@ export default function Inventory() {
               <Package className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
               <p className="text-muted-foreground">No products found</p>
             </div>
+          ) : viewMode === "grouped" ? (
+            <InventoryGroupedView products={filteredProducts} />
           ) : (
             <div className="space-y-2">
               {filteredProducts.map((product) => (
                 <div
                   key={product.id}
-                  className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/50 transition-colors"
+                  className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 rounded-lg border hover:bg-muted/50 transition-colors gap-3"
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
@@ -178,24 +211,24 @@ export default function Inventory() {
                         <AlertCircle className="h-4 w-4 text-warning" />
                       )}
                     </div>
-                    <div className="flex gap-4 text-sm text-muted-foreground">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-sm text-muted-foreground">
                       <span>{product.brand}</span>
                       <span>SKU: {product.master_sku}</span>
                       <span>Barcode: {product.barcode}</span>
+                      {product.color && <span>Color: {product.color}</span>}
+                      {(product.brand_size || product.standard_size) && (
+                        <span>Size: {product.brand_size || product.standard_size}</span>
+                      )}
                     </div>
                   </div>
-                  <div className="flex gap-3">
-                    <div className="text-center">
-                      <Badge variant="outline" className="bg-success/10 text-success border-success/20">
-                        Available: {product.available_units}
-                      </Badge>
-                    </div>
+                  <div className="flex gap-3 flex-wrap">
+                    <Badge variant="outline" className="bg-success/10 text-success border-success/20">
+                      Available: {product.available_units}
+                    </Badge>
                     {product.damaged_units > 0 && (
-                      <div className="text-center">
-                        <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20">
-                          Damaged: {product.damaged_units}
-                        </Badge>
-                      </div>
+                      <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20">
+                        Damaged: {product.damaged_units}
+                      </Badge>
                     )}
                   </div>
                 </div>
@@ -204,6 +237,171 @@ export default function Inventory() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// Grouped View Component for Inventory
+function InventoryGroupedView({ products }: { products: Product[] }) {
+  const [expandedNames, setExpandedNames] = useState<Set<string>>(new Set());
+  const [expandedColors, setExpandedColors] = useState<Set<string>>(new Set());
+
+  // Group products by name, then by color
+  const groupedProducts = products.reduce((acc, product) => {
+    const name = product.name;
+    const color = product.color || "No Color";
+
+    if (!acc[name]) {
+      acc[name] = {};
+    }
+    if (!acc[name][color]) {
+      acc[name][color] = [];
+    }
+    acc[name][color].push(product);
+    return acc;
+  }, {} as Record<string, Record<string, Product[]>>);
+
+  const toggleName = (name: string) => {
+    const newSet = new Set(expandedNames);
+    if (newSet.has(name)) {
+      newSet.delete(name);
+    } else {
+      newSet.add(name);
+    }
+    setExpandedNames(newSet);
+  };
+
+  const toggleColor = (key: string) => {
+    const newSet = new Set(expandedColors);
+    if (newSet.has(key)) {
+      newSet.delete(key);
+    } else {
+      newSet.add(key);
+    }
+    setExpandedColors(newSet);
+  };
+
+  const getColorKey = (name: string, color: string) => `${name}-${color}`;
+
+  return (
+    <div className="space-y-2">
+      {Object.keys(groupedProducts).sort().map((name) => {
+        const isNameExpanded = expandedNames.has(name);
+        const colors = groupedProducts[name];
+        const totalProducts = Object.values(colors).reduce((sum, items) => sum + items.length, 0);
+        const totalAvailable = Object.values(colors).reduce(
+          (sum, items) => sum + items.reduce((s, p) => s + p.available_units, 0), 0
+        );
+
+        return (
+          <div key={name} className="border rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggleName(name)}
+              className="w-full flex items-center justify-between p-4 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+            >
+              <div className="flex items-center gap-2">
+                {isNameExpanded ? (
+                  <span className="text-muted-foreground">▼</span>
+                ) : (
+                  <span className="text-muted-foreground">▶</span>
+                )}
+                <span className="font-semibold text-lg">{name}</span>
+                <span className="text-sm text-muted-foreground">
+                  ({Object.keys(colors).length} colors, {totalProducts} variants)
+                </span>
+              </div>
+              <Badge variant="outline" className="bg-success/10 text-success border-success/20">
+                Total: {totalAvailable}
+              </Badge>
+            </button>
+
+            {isNameExpanded && (
+              <div>
+                {Object.keys(colors).sort().map((color) => {
+                  const colorKey = getColorKey(name, color);
+                  const isColorExpanded = expandedColors.has(colorKey);
+                  const items = colors[color];
+                  const colorTotal = items.reduce((s, p) => s + p.available_units, 0);
+
+                  return (
+                    <div key={colorKey} className="border-t">
+                      <button
+                        onClick={() => toggleColor(colorKey)}
+                        className="w-full flex items-center justify-between p-3 pl-10 bg-muted/10 hover:bg-muted/20 transition-colors text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          {isColorExpanded ? (
+                            <span className="text-muted-foreground text-sm">▼</span>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">▶</span>
+                          )}
+                          <span className="font-medium">{color}</span>
+                          <span className="text-sm text-muted-foreground">
+                            ({items.length} sizes)
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="text-xs">
+                          {colorTotal} units
+                        </Badge>
+                      </button>
+
+                      {isColorExpanded && (
+                        <div>
+                          {items.map((product) => (
+                            <div
+                              key={product.id}
+                              className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 pl-16 border-t hover:bg-muted/5 transition-colors gap-2"
+                            >
+                              <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 gap-2 text-sm">
+                                <div>
+                                  <span className="text-muted-foreground">Size: </span>
+                                  <span className="font-medium">
+                                    {product.brand_size && product.standard_size
+                                      ? `${product.brand_size} (${product.standard_size})`
+                                      : product.brand_size || product.standard_size || "N/A"}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">SKU: </span>
+                                  <span>{product.master_sku}</span>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Barcode: </span>
+                                  <span>{product.barcode || "N/A"}</span>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">MRP: </span>
+                                  <span>₹{product.mrp}</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Badge 
+                                    variant="outline" 
+                                    className={product.available_units <= product.reorder_level 
+                                      ? "bg-destructive/10 text-destructive border-destructive/20" 
+                                      : "bg-success/10 text-success border-success/20"
+                                    }
+                                  >
+                                    {product.available_units}
+                                  </Badge>
+                                  {product.damaged_units > 0 && (
+                                    <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20">
+                                      {product.damaged_units} dmg
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
