@@ -562,79 +562,17 @@ export default function ScanLog() {
 
   const handlePick = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-
-    try {
-      const qty = pickData.quantity ? parseInt(pickData.quantity) : 1;
-      const validation = scanSchema.safeParse({
-        barcode: pickData.barcode,
-        quantity: qty,
-        orderId: pickData.orderId,
-        packetId: pickData.packetId,
-        tagId: pickData.tagId,
-        platform: pickData.platform,
-      });
-
-      if (!validation.success) {
-        toast.error(validation.error.issues[0].message);
-        setLoading(false);
-        return;
-      }
-
-      const { data: product, error: productError } = await supabase
-        .from("products")
-        .select("*")
-        .eq("barcode", validation.data.barcode)
-        .single();
-
-      if (productError || !product) {
-        toast.error("Product not found with this barcode");
-        return;
-      }
-
-      if (product.available_units < validation.data.quantity) {
-        toast.error("Insufficient stock available");
-        return;
-      }
-
-      const { error: scanError } = await supabase.from("scan_logs").insert({
-        product_id: product.id,
-        scan_mode: "pick",
-        quantity: validation.data.quantity,
-        order_id: validation.data.orderId || null,
-        packet_id: validation.data.packetId || null,
-        tag_id: validation.data.tagId || null,
-        platform: validation.data.platform || null,
-      });
-
-      if (scanError) throw scanError;
-
-      const { error: orderError } = await supabase.from("sales_orders").insert({
-        order_id: validation.data.orderId!,
-        packet_id: validation.data.packetId || null,
-        tag_id: validation.data.tagId || null,
-        platform: validation.data.platform!,
-        product_id: product.id,
-        quantity: validation.data.quantity,
-      });
-
-      if (orderError) throw orderError;
-
-      toast.success("Order picked successfully!");
-      setPickData({
-        barcode: "",
-        quantity: "",
-        platform: "",
-        orderId: "",
-        packetId: "",
-        tagId: "",
-      });
-    } catch (error: any) {
-      console.error("Error picking order:", error);
-      toast.error(getUserFriendlyError(error));
-    } finally {
-      setLoading(false);
+    
+    if (!pickData.barcode.trim()) {
+      toast.error("Barcode is required");
+      return;
     }
+
+    // Use the same disambiguation flow as the barcode scanner
+    await handlePickBarcodeScan(pickData.barcode.trim());
+    
+    // Clear the barcode field after processing
+    setPickData(prev => ({ ...prev, barcode: "" }));
   };
 
   const handleDamage = async (e: React.FormEvent) => {
