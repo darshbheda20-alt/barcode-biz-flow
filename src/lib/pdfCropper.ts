@@ -8,10 +8,11 @@ export interface CropResult {
 
 /**
  * Crops Flipkart PDF pages into separate label and invoice PDFs.
- * - Label: Top ~55% of page (above dashed line) - original scale, clipped
- * - Invoice: Bottom ~45% of page (below dashed line) - original scale, clipped
+ * - Label: Top portion of page (above dashed line)
+ * - Invoice: Bottom portion of page (below dashed line)
  * 
- * Uses embedPage with bounding box to actually clip content (not just hide it).
+ * Uses copyPages + MediaBox/CropBox to define visible area without any scaling.
+ * The dashed line separator is approximately at 54% from the top (46% from bottom).
  */
 export async function cropFlipkartPdf(pdfBytes: Uint8Array): Promise<CropResult[]> {
   const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -21,49 +22,31 @@ export async function cropFlipkartPdf(pdfBytes: Uint8Array): Promise<CropResult[
     const page = pdfDoc.getPage(i);
     const { width, height } = page.getSize();
 
-    // Flipkart PDF layout: Label is top ~55%, Invoice is bottom ~45%
-    // The dashed line separator is approximately at 45% from the bottom
-    const splitY = height * 0.45;
-    const labelHeight = height - splitY;
-    const invoiceHeight = splitY;
+    // Flipkart PDF layout: Label is top ~54%, Invoice is bottom ~46%
+    // The dashed line separator is at approximately 46% from the bottom
+    const splitRatio = 0.46;
+    const splitY = height * splitRatio;
 
     // ===== CREATE LABEL PDF (top portion) =====
     const labelDoc = await PDFDocument.create();
-    // Embed only the top portion with bounding box - this actually clips the content
-    const labelEmbedded = await labelDoc.embedPage(page, {
-      left: 0,
-      bottom: splitY,
-      right: width,
-      top: height
-    });
-    // Create page with exact size of the cropped region
-    const labelPage = labelDoc.addPage([width, labelHeight]);
-    // Draw at origin, at original size (no scaling)
-    labelPage.drawPage(labelEmbedded, {
-      x: 0,
-      y: 0,
-      width: width,
-      height: labelHeight
-    });
+    const [labelPage] = await labelDoc.copyPages(pdfDoc, [i]);
+    // Set boxes to show only top portion (from splitY to height)
+    // Box format: [x_min, y_min, x_max, y_max]
+    labelPage.setMediaBox(0, splitY, width, height);
+    labelPage.setCropBox(0, splitY, width, height);
+    labelPage.setTrimBox(0, splitY, width, height);
+    labelPage.setBleedBox(0, splitY, width, height);
+    labelDoc.addPage(labelPage);
 
     // ===== CREATE INVOICE PDF (bottom portion) =====
     const invoiceDoc = await PDFDocument.create();
-    // Embed only the bottom portion with bounding box
-    const invoiceEmbedded = await invoiceDoc.embedPage(page, {
-      left: 0,
-      bottom: 0,
-      right: width,
-      top: splitY
-    });
-    // Create page with exact size of the cropped region
-    const invoicePage = invoiceDoc.addPage([width, invoiceHeight]);
-    // Draw at origin, at original size (no scaling)
-    invoicePage.drawPage(invoiceEmbedded, {
-      x: 0,
-      y: 0,
-      width: width,
-      height: invoiceHeight
-    });
+    const [invoicePage] = await invoiceDoc.copyPages(pdfDoc, [i]);
+    // Set boxes to show only bottom portion (from 0 to splitY)
+    invoicePage.setMediaBox(0, 0, width, splitY);
+    invoicePage.setCropBox(0, 0, width, splitY);
+    invoicePage.setTrimBox(0, 0, width, splitY);
+    invoicePage.setBleedBox(0, 0, width, splitY);
+    invoiceDoc.addPage(invoicePage);
 
     const labelPdf = await labelDoc.save();
     const invoicePdf = await invoiceDoc.save();
