@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Package, AlertCircle, List, LayoutGrid } from "lucide-react";
+import { Search, Package, AlertCircle, List, LayoutGrid, Download, Upload } from "lucide-react";
+import { toast } from "sonner";
+import * as XLSX from "xlsx";
 
 interface Product {
   id: string;
@@ -30,6 +32,70 @@ export default function Inventory() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const exportToExcel = () => {
+    const exportData = products.map(p => ({
+      "Product Name": p.name,
+      "Brand": p.brand,
+      "Master SKU": p.master_sku,
+      "Barcode": p.barcode || "",
+      "Color": p.color || "",
+      "Brand Size": p.brand_size || "",
+      "Standard Size": p.standard_size || "",
+      "MRP": p.mrp,
+      "Cost Price": p.cost_price,
+      "Available Units": p.available_units,
+      "Damaged Units": p.damaged_units,
+      "Reorder Level": p.reorder_level,
+      "Vendor": p.vendor_name
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Inventory");
+    XLSX.writeFile(wb, `inventory_${new Date().toISOString().split('T')[0]}.xlsx`);
+    toast.success("Inventory exported successfully");
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
+
+      let updated = 0;
+      for (const row of rows) {
+        const masterSku = row["Master SKU"] as string;
+        const availableUnits = Number(row["Available Units"]);
+        const damagedUnits = Number(row["Damaged Units"]);
+
+        if (masterSku && !isNaN(availableUnits)) {
+          const { error } = await supabase
+            .from("products")
+            .update({ 
+              available_units: availableUnits,
+              damaged_units: isNaN(damagedUnits) ? undefined : damagedUnits
+            })
+            .eq("master_sku", masterSku);
+
+          if (!error) updated++;
+        }
+      }
+
+      toast.success(`Updated ${updated} products`);
+      fetchProducts();
+    } catch (error) {
+      console.error("Import error:", error);
+      toast.error("Failed to import file");
+    }
+
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   useEffect(() => {
     fetchProducts();
@@ -86,9 +152,28 @@ export default function Inventory() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Inventory Dashboard</h1>
-        <p className="text-muted-foreground">Real-time stock levels and product overview</p>
+      <div className="mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">Inventory Dashboard</h1>
+          <p className="text-muted-foreground">Real-time stock levels and product overview</p>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImport}
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+          />
+          <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+            <Upload className="h-4 w-4 mr-1" />
+            Import
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportToExcel}>
+            <Download className="h-4 w-4 mr-1" />
+            Export
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
