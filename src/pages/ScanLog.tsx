@@ -565,9 +565,10 @@ export default function ScanLog() {
     setLoading(true);
 
     try {
+      const qty = pickData.quantity ? parseInt(pickData.quantity) : 1;
       const validation = scanSchema.safeParse({
         barcode: pickData.barcode,
-        quantity: parseInt(pickData.quantity),
+        quantity: qty,
         orderId: pickData.orderId,
         packetId: pickData.packetId,
         tagId: pickData.tagId,
