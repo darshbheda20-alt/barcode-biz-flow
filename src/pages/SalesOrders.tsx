@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { InvoiceTemplate } from "@/components/InvoiceTemplate";
 import JSZip from 'jszip';
+import { listenLocalEvent, publishRefreshAll } from "@/lib/eventBus";
 
 interface SalesOrder {
   id: string;
@@ -72,8 +73,14 @@ export default function SalesOrders() {
       )
       .subscribe();
 
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', fetchOrders);
+    const cleanupTable = listenLocalEvent('refresh-sales_orders', fetchOrders);
+
     return () => {
       supabase.removeChannel(channel);
+      cleanup();
+      cleanupTable();
     };
   }, []);
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { DebugDownloader } from "./DebugDownloader";
+import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
 
 interface PicklistItem {
   masterSku: string;
@@ -48,8 +49,14 @@ export const PicklistView = () => {
       )
       .subscribe();
 
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', () => fetchPicklist());
+    const cleanupTable = listenLocalEvent('refresh-process_orders', () => fetchPicklist());
+
     return () => {
       supabase.removeChannel(channel);
+      cleanup();
+      cleanupTable();
     };
   }, []);
 
@@ -423,6 +430,12 @@ export const PicklistView = () => {
 
         // Clear the current view
         setPicklist([]);
+        
+        // Trigger refresh events for all related tables
+        publishTableRefresh('process_orders');
+        publishTableRefresh('order_packing');
+        publishTableRefresh('crop_queue');
+        publishTableRefresh('sales_orders');
         
         toast({
           title: "Success",

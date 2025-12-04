@@ -7,6 +7,7 @@ import { toast } from "@/hooks/use-toast";
 import { Loader2, Download } from "lucide-react";
 import { cropFlipkartPdf } from "@/lib/pdfCropper";
 import { DebugDownloader } from "./DebugDownloader";
+import { listenLocalEvent, publishRefreshAll } from "@/lib/eventBus";
 
 interface CropQueueItem {
   id: string;
@@ -42,8 +43,14 @@ export function CropAndPrintQueue() {
       )
       .subscribe();
 
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', fetchQueue);
+    const cleanupTable = listenLocalEvent('refresh-crop_queue', fetchQueue);
+
     return () => {
       supabase.removeChannel(channel);
+      cleanup();
+      cleanupTable();
     };
   }, []);
 
@@ -159,6 +166,9 @@ export function CropAndPrintQueue() {
           completed_at: new Date().toISOString()
         })
         .eq('id', item.id);
+
+      // Trigger refresh events
+      publishRefreshAll();
 
       toast({
         title: "Success",

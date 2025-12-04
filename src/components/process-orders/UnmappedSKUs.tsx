@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
 import { AlertCircle, Link2, Loader2, Trash2 } from "lucide-react";
 import {
   Dialog,
@@ -64,8 +65,32 @@ export const UnmappedSKUs = () => {
       )
       .subscribe();
 
+    // Also listen for products changes for the product list
+    const productsChannel = supabase
+      .channel('products_for_unmapped')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        () => {
+          fetchProducts();
+        }
+      )
+      .subscribe();
+
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', () => {
+      fetchUnmappedSKUs();
+      fetchProducts();
+    });
+    const cleanupTable = listenLocalEvent('refresh-process_orders', fetchUnmappedSKUs);
+    const cleanupProducts = listenLocalEvent('refresh-products', fetchProducts);
+
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(productsChannel);
+      cleanup();
+      cleanupTable();
+      cleanupProducts();
     };
   }, []);
 
@@ -158,6 +183,10 @@ export const UnmappedSKUs = () => {
         title: "Success",
         description: `Mapped ${selectedSKU.marketplace_sku} to ${selectedProduct.master_sku}`
       });
+
+      // Trigger refresh events
+      publishTableRefresh('sku_aliases');
+      publishTableRefresh('process_orders');
 
       setSelectedSKU(null);
       setSelectedProduct(null);
