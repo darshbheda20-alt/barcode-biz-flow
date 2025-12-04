@@ -4,7 +4,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Package, AlertCircle, List, LayoutGrid, Download, Upload, Table2 } from "lucide-react";
+import { Search, Package, AlertCircle, List, LayoutGrid, Download, Upload, Table2, Filter } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
@@ -28,12 +35,14 @@ interface Product {
 }
 
 type ViewMode = "list" | "grouped" | "pivot";
+type StockFilter = "all" | "low" | "zero";
 
 export default function Inventory() {
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const downloadTemplate = () => {
@@ -163,12 +172,17 @@ export default function Inventory() {
     }
   };
 
-  const filteredProducts = products.filter(
-    (p) =>
+  const filteredProducts = products
+    .filter((p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.barcode.toLowerCase().includes(search.toLowerCase()) ||
+      (p.barcode && p.barcode.toLowerCase().includes(search.toLowerCase())) ||
       p.master_sku.toLowerCase().includes(search.toLowerCase())
-  );
+    )
+    .filter((p) => {
+      if (stockFilter === "low") return p.available_units > 0 && p.available_units < p.reorder_level;
+      if (stockFilter === "zero") return p.available_units === 0;
+      return true;
+    });
 
   const totalProducts = products.length;
   const lowStock = products.filter((p) => p.available_units < p.reorder_level).length;
@@ -300,6 +314,17 @@ export default function Inventory() {
                   Pivot
                 </Button>
               </div>
+              <Select value={stockFilter} onValueChange={(v) => setStockFilter(v as StockFilter)}>
+                <SelectTrigger className="w-full sm:w-36">
+                  <Filter className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="Stock filter" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Stock</SelectItem>
+                  <SelectItem value="low">Low Stock</SelectItem>
+                  <SelectItem value="zero">Zero Stock</SelectItem>
+                </SelectContent>
+              </Select>
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
