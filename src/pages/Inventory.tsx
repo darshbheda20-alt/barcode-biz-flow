@@ -4,10 +4,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Package, AlertCircle, List, LayoutGrid, Download, Upload } from "lucide-react";
+import { Search, Package, AlertCircle, List, LayoutGrid, Download, Upload, Table2 } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
+import { InventoryPivotView } from "@/components/inventory/InventoryPivotView";
 
 interface Product {
   id: string;
@@ -26,7 +27,7 @@ interface Product {
   vendor_name: string;
 }
 
-type ViewMode = "list" | "grouped";
+type ViewMode = "list" | "grouped" | "pivot";
 
 export default function Inventory() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -270,7 +271,7 @@ export default function Inventory() {
               <CardDescription>Search and view all inventory items</CardDescription>
             </div>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
-              <div className="flex border rounded-lg overflow-hidden">
+              <div className="flex border rounded-lg overflow-hidden flex-wrap">
                 <Button
                   variant={viewMode === "list" ? "default" : "ghost"}
                   size="sm"
@@ -288,6 +289,15 @@ export default function Inventory() {
                 >
                   <LayoutGrid className="h-4 w-4 mr-1" />
                   Grouped
+                </Button>
+                <Button
+                  variant={viewMode === "pivot" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("pivot")}
+                  className="rounded-none"
+                >
+                  <Table2 className="h-4 w-4 mr-1" />
+                  Pivot
                 </Button>
               </div>
               <div className="relative w-full sm:w-64">
@@ -310,6 +320,8 @@ export default function Inventory() {
               <Package className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
               <p className="text-muted-foreground">No products found</p>
             </div>
+          ) : viewMode === "pivot" ? (
+            <InventoryPivotView products={filteredProducts} onRefresh={fetchProducts} />
           ) : viewMode === "grouped" ? (
             <InventoryGroupedView products={filteredProducts} />
           ) : (
