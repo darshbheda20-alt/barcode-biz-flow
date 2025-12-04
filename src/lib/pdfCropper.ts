@@ -1,4 +1,4 @@
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 
 export interface CropResult {
   labelPdf: Uint8Array;
@@ -12,8 +12,8 @@ const SIX_INCHES = 432;
 
 /**
  * Crops Flipkart PDF pages into separate label and invoice PDFs.
- * - Label: 4x6 inches PORTRAIT (288 x 432 points)
- * - Invoice: 4x6 inches LANDSCAPE (432 x 288 points)
+ * - Label: 4x6 inches PORTRAIT - crops top ~55% of page
+ * - Invoice: 6x4 inches LANDSCAPE - crops bottom ~45% of page
  */
 export async function cropFlipkartPdf(pdfBytes: Uint8Array): Promise<CropResult[]> {
   const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -23,65 +23,35 @@ export async function cropFlipkartPdf(pdfBytes: Uint8Array): Promise<CropResult[
     const page = pdfDoc.getPage(i);
     const { width, height } = page.getSize();
 
-    // Flipkart PDF layout:
-    // - Top portion (~60%): Shipping Label
-    // - Bottom portion (~40%): Tax Invoice
-    const splitRatio = 0.40;
-    const splitY = height * splitRatio;
+    // Flipkart PDF layout: Label is top ~55%, Invoice is bottom ~45%
+    // The dashed line separator is approximately at 45% from the bottom
+    const splitY = height * 0.45;
 
     // ===== CREATE LABEL PDF (4x6 Portrait) =====
     const labelDoc = await PDFDocument.create();
-    const [copiedLabelPage] = await labelDoc.copyPages(pdfDoc, [i]);
+    const [labelPage] = await labelDoc.copyPages(pdfDoc, [i]);
     
-    // Crop to top 60% (label area)
-    const labelHeight = height - splitY;
-    copiedLabelPage.setMediaBox(0, splitY, width, labelHeight);
-    copiedLabelPage.setCropBox(0, splitY, width, labelHeight);
+    // Crop to top portion (label area) - from splitY to top
+    // MediaBox: [x, y, width, height] where y is from bottom
+    const labelCropHeight = height - splitY;
+    labelPage.setMediaBox(0, splitY, width, labelCropHeight);
+    labelPage.setCropBox(0, splitY, width, labelCropHeight);
+    labelPage.setTrimBox(0, splitY, width, labelCropHeight);
+    labelPage.setBleedBox(0, splitY, width, labelCropHeight);
     
-    // Scale to fit 4x6 portrait
-    const labelScaleX = FOUR_INCHES / width;
-    const labelScaleY = SIX_INCHES / labelHeight;
-    const labelScale = Math.min(labelScaleX, labelScaleY);
-    
-    // Set final size to 4x6 portrait
-    copiedLabelPage.setSize(FOUR_INCHES, SIX_INCHES);
-    copiedLabelPage.setMediaBox(0, 0, FOUR_INCHES, SIX_INCHES);
-    copiedLabelPage.setCropBox(0, 0, FOUR_INCHES, SIX_INCHES);
-    
-    // Scale and center the content
-    copiedLabelPage.scaleContent(labelScale, labelScale);
-    const labelOffsetX = (FOUR_INCHES - width * labelScale) / 2;
-    const labelOffsetY = (SIX_INCHES - labelHeight * labelScale) / 2 - splitY * labelScale;
-    copiedLabelPage.translateContent(labelOffsetX, labelOffsetY);
-    
-    labelDoc.addPage(copiedLabelPage);
+    labelDoc.addPage(labelPage);
 
-    // ===== CREATE INVOICE PDF (4x6 Landscape = 6x4) =====
+    // ===== CREATE INVOICE PDF (6x4 Landscape) =====
     const invoiceDoc = await PDFDocument.create();
-    const [copiedInvoicePage] = await invoiceDoc.copyPages(pdfDoc, [i]);
+    const [invoicePage] = await invoiceDoc.copyPages(pdfDoc, [i]);
     
-    // Crop to bottom 40% (invoice area)
-    const invoiceHeight = splitY;
-    copiedInvoicePage.setMediaBox(0, 0, width, invoiceHeight);
-    copiedInvoicePage.setCropBox(0, 0, width, invoiceHeight);
+    // Crop to bottom portion (invoice area) - from 0 to splitY
+    invoicePage.setMediaBox(0, 0, width, splitY);
+    invoicePage.setCropBox(0, 0, width, splitY);
+    invoicePage.setTrimBox(0, 0, width, splitY);
+    invoicePage.setBleedBox(0, 0, width, splitY);
     
-    // Scale to fit 6x4 landscape (width=6in, height=4in)
-    const invoiceScaleX = SIX_INCHES / width;
-    const invoiceScaleY = FOUR_INCHES / invoiceHeight;
-    const invoiceScale = Math.min(invoiceScaleX, invoiceScaleY);
-    
-    // Set final size to 6x4 landscape
-    copiedInvoicePage.setSize(SIX_INCHES, FOUR_INCHES);
-    copiedInvoicePage.setMediaBox(0, 0, SIX_INCHES, FOUR_INCHES);
-    copiedInvoicePage.setCropBox(0, 0, SIX_INCHES, FOUR_INCHES);
-    
-    // Scale and center the content
-    copiedInvoicePage.scaleContent(invoiceScale, invoiceScale);
-    const invoiceOffsetX = (SIX_INCHES - width * invoiceScale) / 2;
-    const invoiceOffsetY = (FOUR_INCHES - invoiceHeight * invoiceScale) / 2;
-    copiedInvoicePage.translateContent(invoiceOffsetX, invoiceOffsetY);
-    
-    invoiceDoc.addPage(copiedInvoicePage);
+    invoiceDoc.addPage(invoicePage);
 
     const labelPdf = await labelDoc.save();
     const invoicePdf = await invoiceDoc.save();
