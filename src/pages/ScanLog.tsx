@@ -70,6 +70,31 @@ export default function ScanLog() {
   const [editQuantity, setEditQuantity] = useState("1");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // ===== PICK SECTION STATE =====
+  const [pickScannedBarcode, setPickScannedBarcode] = useState("");
+  const pickLastScanTimeRef = useRef<number>(0);
+  
+  // Pick auto-map state
+  const [pickActiveAutoMap, setPickActiveAutoMap] = useState<{
+    barcode: string;
+    master_sku: string;
+    product_id: string;
+    remaining_auto_scans: number;
+  } | null>(null);
+  const [pickApplyToNextScans, setPickApplyToNextScans] = useState(false);
+
+  // Pick UI state
+  const [showPickConfirmation, setShowPickConfirmation] = useState(false);
+  const [pickConfirmationProduct, setPickConfirmationProduct] = useState<Product | null>(null);
+  const [showPickSKUSelector, setShowPickSKUSelector] = useState(false);
+  const [pickCandidateProducts, setPickCandidateProducts] = useState<Product[]>([]);
+  const [showPickUnmappedModal, setShowPickUnmappedModal] = useState(false);
+  const [pickSessionScans, setPickSessionScans] = useState<Array<{sku: string, qty: number}>>([]);
+  const [showPickQuantityEdit, setShowPickQuantityEdit] = useState(false);
+  const [pickEditQuantity, setPickEditQuantity] = useState("1");
+  const [showInsufficientStockModal, setShowInsufficientStockModal] = useState(false);
+  const [insufficientStockProduct, setInsufficientStockProduct] = useState<Product | null>(null);
+
   const [receiveData, setReceiveData] = useState({
     barcode: "",
     quantity: "",
@@ -96,6 +121,16 @@ export default function ScanLog() {
       return true;
     }
     lastScanTimeRef.current = now;
+    return false;
+  };
+
+  // Prevent double scans for Pick within 300ms
+  const isPickDuplicateScan = (barcode: string): boolean => {
+    const now = Date.now();
+    if (barcode === pickScannedBarcode && now - pickLastScanTimeRef.current < 300) {
+      return true;
+    }
+    pickLastScanTimeRef.current = now;
     return false;
   };
 
@@ -128,7 +163,7 @@ export default function ScanLog() {
     return products || [];
   };
 
-  // Handle barcode scan
+  // Handle barcode scan for Receive
   const handleBarcodeScan = async (barcode: string) => {
     if (isDuplicateScan(barcode)) return;
 
@@ -195,7 +230,72 @@ export default function ScanLog() {
     }
   };
 
-  // Add stock to database
+  // ===== PICK BARCODE SCAN HANDLER =====
+  const handlePickBarcodeScan = async (barcode: string) => {
+    if (isPickDuplicateScan(barcode)) return;
+
+    setPickScannedBarcode(barcode);
+
+    // Check for active auto-map first
+    if (pickActiveAutoMap && barcode === pickActiveAutoMap.barcode) {
+      if (pickActiveAutoMap.remaining_auto_scans > 0) {
+        // Check stock before auto-pick
+        const { data: product } = await supabase
+          .from("products")
+          .select("id, name, master_sku, available_units, color, brand_size, standard_size")
+          .eq("id", pickActiveAutoMap.product_id)
+          .single();
+
+        if (product && product.available_units < 1) {
+          setInsufficientStockProduct(product);
+          setShowInsufficientStockModal(true);
+          return;
+        }
+
+        // Auto-pick without modal
+        await pickStock(pickActiveAutoMap.product_id, pickActiveAutoMap.master_sku, 1);
+        const newRemaining = pickActiveAutoMap.remaining_auto_scans - 1;
+        setPickActiveAutoMap({
+          ...pickActiveAutoMap,
+          remaining_auto_scans: newRemaining
+        });
+        toast.success(`Auto-picked -1 from ${pickActiveAutoMap.master_sku} (remaining ${newRemaining})`);
+        return;
+      } else {
+        // Remaining is 0, re-prompt
+        setPickActiveAutoMap(null);
+        const products = await resolveBarcodeToProducts(barcode);
+        if (products.length > 0) {
+          setPickCandidateProducts(products);
+          setShowPickSKUSelector(true);
+        }
+        return;
+      }
+    }
+
+    // Different barcode clears auto-map
+    if (pickActiveAutoMap && barcode !== pickActiveAutoMap.barcode) {
+      setPickActiveAutoMap(null);
+      toast.info("Auto-pick ended - different barcode");
+    }
+
+    const products = await resolveBarcodeToProducts(barcode);
+
+    if (products.length === 0) {
+      // No match - show unmapped modal
+      setShowPickUnmappedModal(true);
+    } else if (products.length === 1) {
+      // Exact match - show confirmation
+      setPickConfirmationProduct(products[0]);
+      setShowPickConfirmation(true);
+    } else {
+      // Multiple matches - show selector
+      setPickCandidateProducts(products);
+      setShowPickSKUSelector(true);
+    }
+  };
+
+  // Add stock to database (Receive)
   const addStock = async (masterSKU: string, qty: number) => {
     const { data: product } = await supabase
       .from("products")
@@ -226,7 +326,70 @@ export default function ScanLog() {
     publishTableRefresh('scan_logs');
   };
 
-  // Handle confirmation (single match)
+  // ===== PICK STOCK FUNCTION =====
+  const pickStock = async (productId: string, masterSKU: string, qty: number) => {
+    // Verify stock availability
+    const { data: product } = await supabase
+      .from("products")
+      .select("available_units")
+      .eq("id", productId)
+      .single();
+
+    if (!product) {
+      toast.error("Product not found");
+      return false;
+    }
+
+    if (product.available_units < qty) {
+      toast.error(`Insufficient stock! Available: ${product.available_units} units`);
+      return false;
+    }
+
+    const { error } = await supabase.from("scan_logs").insert({
+      product_id: productId,
+      scan_mode: "pick",
+      quantity: qty,
+      platform: pickData.platform || null,
+      order_id: pickData.orderId || null,
+      packet_id: pickData.packetId || null,
+      tag_id: pickData.tagId || null,
+    });
+
+    if (error) {
+      toast.error(getUserFriendlyError(error));
+      return false;
+    }
+
+    // Create sales order if we have order info
+    if (pickData.orderId && pickData.platform) {
+      const { error: orderError } = await supabase.from("sales_orders").insert({
+        order_id: pickData.orderId,
+        packet_id: pickData.packetId || null,
+        tag_id: pickData.tagId || null,
+        platform: pickData.platform,
+        product_id: productId,
+        quantity: qty,
+        marketplace_sku: masterSKU,
+        master_sku: masterSKU,
+      });
+
+      if (orderError) {
+        console.error("Error creating sales order:", orderError);
+        // Don't fail the pick, just log the error
+      }
+    }
+
+    setPickSessionScans(prev => [...prev, { sku: masterSKU, qty }]);
+    
+    // Trigger refresh for products and scan_logs
+    publishTableRefresh('products');
+    publishTableRefresh('scan_logs');
+    publishTableRefresh('sales_orders');
+
+    return true;
+  };
+
+  // Handle confirmation (single match) for Receive
   const handleConfirmSingle = async (customQty?: number) => {
     if (!confirmationProduct) return;
 
@@ -256,7 +419,43 @@ export default function ScanLog() {
     setApplyToNextScans(false);
   };
 
-  // Handle SKU selection (multiple matches)
+  // ===== PICK CONFIRMATION HANDLER =====
+  const handlePickConfirmSingle = async (customQty?: number) => {
+    if (!pickConfirmationProduct) return;
+
+    const qty = customQty || 1;
+
+    // Check stock
+    if (pickConfirmationProduct.available_units < qty) {
+      setInsufficientStockProduct(pickConfirmationProduct);
+      setShowInsufficientStockModal(true);
+      setShowPickConfirmation(false);
+      return;
+    }
+
+    const success = await pickStock(pickConfirmationProduct.id, pickConfirmationProduct.master_sku, qty);
+
+    if (success) {
+      // If "Apply to next scans" was checked, set active auto-map
+      if (pickApplyToNextScans) {
+        setPickActiveAutoMap({
+          barcode: pickScannedBarcode,
+          master_sku: pickConfirmationProduct.master_sku,
+          product_id: pickConfirmationProduct.id,
+          remaining_auto_scans: Math.max(0, 5 - qty)
+        });
+        toast.success(`Auto-pick enabled for ${pickConfirmationProduct.master_sku} (${5 - qty} remaining)`);
+      } else {
+        toast.success(`Stock picked: -${qty}`);
+      }
+    }
+
+    setShowPickConfirmation(false);
+    setPickConfirmationProduct(null);
+    setPickApplyToNextScans(false);
+  };
+
+  // Handle SKU selection (multiple matches) for Receive
   const handleSKUSelect = async (product: Product, customQty?: number) => {
     const qty = customQty || 1;
     await addStock(product.master_sku, qty);
@@ -282,6 +481,40 @@ export default function ScanLog() {
     setApplyToNextScans(false);
   };
 
+  // ===== PICK SKU SELECTION HANDLER =====
+  const handlePickSKUSelect = async (product: Product, customQty?: number) => {
+    const qty = customQty || 1;
+
+    // Check stock
+    if (product.available_units < qty) {
+      setInsufficientStockProduct(product);
+      setShowInsufficientStockModal(true);
+      setShowPickSKUSelector(false);
+      return;
+    }
+
+    const success = await pickStock(product.id, product.master_sku, qty);
+
+    if (success) {
+      // If "Apply to next scans" was checked, set active auto-map
+      if (pickApplyToNextScans) {
+        setPickActiveAutoMap({
+          barcode: pickScannedBarcode,
+          master_sku: product.master_sku,
+          product_id: product.id,
+          remaining_auto_scans: Math.max(0, 5 - qty)
+        });
+        toast.success(`Auto-pick enabled for ${product.master_sku} (${5 - qty} remaining)`);
+      } else {
+        toast.success(`Picked from ${product.master_sku}`);
+      }
+    }
+
+    setShowPickSKUSelector(false);
+    setPickCandidateProducts([]);
+    setPickApplyToNextScans(false);
+  };
+
   // Enable session auto-add mode
   const enableSessionMode = () => {
     setSessionMode(true);
@@ -297,7 +530,7 @@ export default function ScanLog() {
     toast.info("Session stopped");
   };
 
-  // Undo last scan
+  // Undo last scan (Receive)
   const handleUndo = () => {
     if (sessionScans.length === 0) {
       toast.error("No scans to undo");
@@ -308,6 +541,17 @@ export default function ScanLog() {
     setSessionScans(prev => prev.slice(0, -1));
     setConsecutiveCount(prev => Math.max(0, prev - 1));
     toast.success(`Undone: ${last.sku} -${last.qty}`);
+  };
+
+  // Undo last scan (Pick)
+  const handlePickUndo = () => {
+    if (pickSessionScans.length === 0) {
+      toast.error("No scans to undo");
+      return;
+    }
+    const last = pickSessionScans[pickSessionScans.length - 1];
+    setPickSessionScans(prev => prev.slice(0, -1));
+    toast.success(`Undone: ${last.sku} +${last.qty} (stock restored)`);
   };
 
   const handleReceive = async (e: React.FormEvent) => {
@@ -802,16 +1046,39 @@ export default function ScanLog() {
               <CardDescription>Scan products to fulfill orders and reduce stock</CardDescription>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handlePick} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Auto-pick indicator */}
+              {pickActiveAutoMap && (
+                <div className="mb-4 p-3 bg-destructive/10 border border-destructive rounded-lg flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-destructive animate-pulse" />
+                    <span className="font-medium">
+                      Auto-pick: {pickActiveAutoMap.master_sku} (Remaining: {pickActiveAutoMap.remaining_auto_scans})
+                    </span>
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => {
+                      setPickActiveAutoMap(null);
+                      toast.info("Auto-pick stopped");
+                    }}
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Stop
+                  </Button>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                {/* Order Info Section */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-muted/30 rounded-lg">
                   <div className="space-y-2">
-                    <Label htmlFor="pick-platform">Platform *</Label>
+                    <Label htmlFor="pick-platform">Platform</Label>
                     <Select
                       value={pickData.platform}
                       onValueChange={(value) =>
                         setPickData({ ...pickData, platform: value })
                       }
-                      required
                     >
                       <SelectTrigger id="pick-platform">
                         <SelectValue placeholder="Select platform" />
@@ -827,11 +1094,10 @@ export default function ScanLog() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="pick-order-id">Order ID *</Label>
+                    <Label htmlFor="pick-order-id">Order ID</Label>
                     <Input
                       id="pick-order-id"
                       placeholder="Enter order ID"
-                      required
                       value={pickData.orderId}
                       onChange={(e) =>
                         setPickData({ ...pickData, orderId: e.target.value })
@@ -864,39 +1130,322 @@ export default function ScanLog() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="pick-barcode">Product Barcode *</Label>
-                  <Input
-                    id="pick-barcode"
-                    placeholder="Scan or enter barcode"
-                    required
-                    value={pickData.barcode}
-                    onChange={(e) =>
-                      setPickData({ ...pickData, barcode: e.target.value })
-                    }
-                  />
-                </div>
+                {/* Barcode Scanner */}
+                <BarcodeScanner onScan={handlePickBarcodeScan} />
 
-                <div className="space-y-2">
-                  <Label htmlFor="pick-quantity">Quantity *</Label>
-                  <Input
-                    id="pick-quantity"
-                    type="number"
-                    min="1"
-                    required
-                    value={pickData.quantity}
-                    onChange={(e) =>
-                      setPickData({ ...pickData, quantity: e.target.value })
-                    }
-                  />
-                </div>
+                {/* Manual Entry */}
+                <form onSubmit={handlePick} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="pick-barcode">Or Enter Barcode Manually</Label>
+                    <Input
+                      id="pick-barcode"
+                      placeholder="Enter barcode"
+                      value={pickData.barcode}
+                      onChange={(e) =>
+                        setPickData({ ...pickData, barcode: e.target.value })
+                      }
+                    />
+                  </div>
 
-                <Button type="submit" disabled={loading} className="w-full">
-                  {loading ? "Processing..." : "Submit Pick"}
-                </Button>
-              </form>
+                  <div className="space-y-2">
+                    <Label htmlFor="pick-quantity">Quantity</Label>
+                    <Input
+                      id="pick-quantity"
+                      type="number"
+                      min="1"
+                      placeholder="1"
+                      value={pickData.quantity}
+                      onChange={(e) =>
+                        setPickData({ ...pickData, quantity: e.target.value })
+                      }
+                    />
+                  </div>
+
+                  <Button type="submit" disabled={loading} className="w-full">
+                    {loading ? "Processing..." : "Submit Pick"}
+                  </Button>
+                </form>
+
+                {/* Session Scans */}
+                {pickSessionScans.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Session Picks ({pickSessionScans.length})</Label>
+                      <Button variant="ghost" size="sm" onClick={handlePickUndo}>
+                        <Undo2 className="h-4 w-4 mr-1" />
+                        Undo
+                      </Button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-1 text-sm">
+                      {pickSessionScans.map((scan, i) => (
+                        <div key={i} className="flex justify-between p-2 bg-destructive/10 rounded">
+                          <span>{scan.sku}</span>
+                          <span className="text-destructive">-{scan.qty}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
+
+          {/* Pick Confirmation Modal - Single Match */}
+          <Dialog open={showPickConfirmation} onOpenChange={setShowPickConfirmation}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Confirm Pick</DialogTitle>
+                <DialogDescription>Verify this is the correct product to pick</DialogDescription>
+              </DialogHeader>
+              
+              {pickConfirmationProduct && (
+                <div className="space-y-4">
+                  <div className="p-4 bg-muted rounded-lg space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Product:</span>
+                      <span className="font-medium">{pickConfirmationProduct.name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Master SKU:</span>
+                      <span className="font-mono font-bold">{pickConfirmationProduct.master_sku}</span>
+                    </div>
+                    {pickConfirmationProduct.brand_size && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Size:</span>
+                        <span>{pickConfirmationProduct.brand_size}</span>
+                      </div>
+                    )}
+                    {pickConfirmationProduct.color && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Color:</span>
+                        <span>{pickConfirmationProduct.color}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Available:</span>
+                      <span className={`font-medium ${pickConfirmationProduct.available_units < 5 ? 'text-destructive' : ''}`}>
+                        {pickConfirmationProduct.available_units} units
+                      </span>
+                    </div>
+                  </div>
+
+                  {pickConfirmationProduct.available_units < 5 && (
+                    <div className="flex items-center gap-2 p-2 bg-destructive/10 border border-destructive/30 rounded text-sm text-destructive">
+                      <AlertTriangle className="h-4 w-4" />
+                      Low stock warning!
+                    </div>
+                  )}
+
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id="pick-apply-to-next" 
+                        checked={pickApplyToNextScans}
+                        onCheckedChange={(checked) => setPickApplyToNextScans(checked as boolean)}
+                      />
+                      <label htmlFor="pick-apply-to-next" className="text-sm cursor-pointer font-medium">
+                        Apply to next scans (up to 5)
+                      </label>
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      If checked, this SKU will be auto-selected for the next picks of this barcode.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter className="gap-2">
+                <Button variant="outline" onClick={() => setShowPickConfirmation(false)}>
+                  Cancel
+                </Button>
+                <Button variant="outline" onClick={() => {
+                  setShowPickConfirmation(false);
+                  setPickActiveAutoMap(null);
+                  setShowPickSKUSelector(true);
+                  setPickCandidateProducts(pickConfirmationProduct ? [pickConfirmationProduct] : []);
+                }}>
+                  Change SKU
+                </Button>
+                <Button variant="outline" onClick={() => {
+                  setShowPickQuantityEdit(true);
+                  setShowPickConfirmation(false);
+                }}>
+                  <Edit3 className="h-4 w-4 mr-1" />
+                  Edit Qty
+                </Button>
+                <Button variant="destructive" onClick={() => handlePickConfirmSingle()}>
+                  Confirm (-1)
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Pick Quantity Edit Modal */}
+          <Dialog open={showPickQuantityEdit} onOpenChange={setShowPickQuantityEdit}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Edit Pick Quantity</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Quantity</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={pickEditQuantity}
+                    onChange={(e) => setPickEditQuantity(e.target.value)}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowPickQuantityEdit(false)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={() => {
+                  handlePickConfirmSingle(parseInt(pickEditQuantity));
+                  setShowPickQuantityEdit(false);
+                  setPickEditQuantity("1");
+                }}>
+                  Confirm Pick
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Pick SKU Selector Modal - Multiple Matches */}
+          <Dialog open={showPickSKUSelector} onOpenChange={setShowPickSKUSelector}>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Select Correct Master SKU</DialogTitle>
+                <DialogDescription>Multiple products share this barcode - select the one to pick from</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="pick-apply-to-next-multi" 
+                      checked={pickApplyToNextScans}
+                      onCheckedChange={(checked) => setPickApplyToNextScans(checked as boolean)}
+                    />
+                    <label htmlFor="pick-apply-to-next-multi" className="text-sm cursor-pointer font-medium">
+                      Apply to next scans (up to 5)
+                    </label>
+                    {pickApplyToNextScans && (
+                      <span className="text-xs text-destructive font-medium ml-auto">
+                        Remaining: 5
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground ml-6">
+                    If checked, this SKU will be auto-selected for the next picks of this barcode.
+                  </p>
+                </div>
+
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {pickCandidateProducts.map((product) => (
+                    <button
+                      key={product.id}
+                      onClick={() => handlePickSKUSelect(product)}
+                      className="w-full p-4 border rounded-lg hover:bg-muted/50 text-left transition-colors"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <div className="font-medium">{product.name}</div>
+                            <div className="font-mono text-sm text-primary">{product.master_sku}</div>
+                          </div>
+                          <div className={`text-sm ${product.available_units < 5 ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+                            Stock: {product.available_units}
+                          </div>
+                        </div>
+                        <div className="flex gap-4 text-sm text-muted-foreground">
+                          {product.brand_size && <span>Size: {product.brand_size}</span>}
+                          {product.color && <span>Color: {product.color}</span>}
+                        </div>
+                        {product.available_units < 1 && (
+                          <div className="text-xs text-destructive flex items-center gap-1">
+                            <XCircle className="h-3 w-3" />
+                            Out of stock
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowPickSKUSelector(false)}>
+                  Cancel
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Pick Unmapped Barcode Modal */}
+          <Dialog open={showPickUnmappedModal} onOpenChange={setShowPickUnmappedModal}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Barcode Not Recognized</DialogTitle>
+                <DialogDescription>
+                  Barcode: <span className="font-mono font-bold">{pickScannedBarcode}</span>
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  This barcode is not linked to any product. Please map it in Product Management first.
+                </p>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowPickUnmappedModal(false)}>
+                  Close
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Insufficient Stock Modal */}
+          <Dialog open={showInsufficientStockModal} onOpenChange={setShowInsufficientStockModal}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-destructive">
+                  <AlertTriangle className="h-5 w-5" />
+                  Insufficient Stock
+                </DialogTitle>
+              </DialogHeader>
+
+              {insufficientStockProduct && (
+                <div className="space-y-4">
+                  <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Product:</span>
+                      <span className="font-medium">{insufficientStockProduct.name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Master SKU:</span>
+                      <span className="font-mono font-bold">{insufficientStockProduct.master_sku}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Available:</span>
+                      <span className="font-medium text-destructive">{insufficientStockProduct.available_units} units</span>
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Cannot pick from this product as there is insufficient stock available.
+                  </p>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowInsufficientStockModal(false)}>
+                  Close
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="damage">
@@ -922,8 +1471,9 @@ export default function ScanLog() {
                     }
                   />
                 </div>
+
                 <div className="space-y-2">
-                  <Label htmlFor="damage-quantity">Damaged Quantity *</Label>
+                  <Label htmlFor="damage-quantity">Quantity *</Label>
                   <Input
                     id="damage-quantity"
                     type="number"
@@ -935,13 +1485,9 @@ export default function ScanLog() {
                     }
                   />
                 </div>
-                <Button
-                  type="submit"
-                  disabled={loading}
-                  variant="destructive"
-                  className="w-full"
-                >
-                  {loading ? "Processing..." : "Submit Damage"}
+
+                <Button type="submit" disabled={loading} className="w-full" variant="destructive">
+                  {loading ? "Processing..." : "Record Damage"}
                 </Button>
               </form>
             </CardContent>
