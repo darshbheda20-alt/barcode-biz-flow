@@ -7,6 +7,7 @@ import { Package, Loader2, Download, Trash2, History, Archive } from "lucide-rea
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
 import { format } from "date-fns";
+import { listenLocalEvent, publishRefreshAll } from "@/lib/eventBus";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -61,8 +62,14 @@ export function OrderPackingList() {
       )
       .subscribe();
 
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', fetchOrders);
+    const cleanupTable = listenLocalEvent('refresh-order_packing', fetchOrders);
+
     return () => {
       supabase.removeChannel(channel);
+      cleanup();
+      cleanupTable();
     };
   }, [viewingCompleted]);
 
@@ -110,6 +117,9 @@ export function OrderPackingList() {
         description: "Cleared all pending packing orders"
       });
 
+      // Trigger refresh event
+      publishRefreshAll();
+      
       fetchOrders();
     } catch (error) {
       console.error('Error clearing orders:', error);

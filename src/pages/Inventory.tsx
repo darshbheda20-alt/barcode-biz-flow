@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Search, Package, AlertCircle, List, LayoutGrid, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
 
 interface Product {
   id: string;
@@ -103,6 +104,10 @@ export default function Inventory() {
       }
 
       toast.success(`Updated ${updated} products`);
+      
+      // Trigger refresh events
+      publishTableRefresh('products');
+      
       fetchProducts();
     } catch (error) {
       console.error("Import error:", error);
@@ -130,8 +135,14 @@ export default function Inventory() {
       )
       .subscribe();
 
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', fetchProducts);
+    const cleanupTable = listenLocalEvent('refresh-products', fetchProducts);
+
     return () => {
       supabase.removeChannel(channel);
+      cleanup();
+      cleanupTable();
     };
   }, []);
 

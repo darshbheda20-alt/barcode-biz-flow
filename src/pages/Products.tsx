@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import BarcodeScanner from "@/components/BarcodeScanner";
 import ProductGroupedView from "@/components/ProductGroupedView";
 import { z } from "zod";
 import { getUserFriendlyError } from "@/lib/errorHandling";
+import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
 
 const productSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(200, "Name must be less than 200 characters"),
@@ -86,8 +87,14 @@ export default function Products() {
       )
       .subscribe();
 
+    // Listen for local refresh events
+    const cleanup = listenLocalEvent('refresh-all', fetchProducts);
+    const cleanupTable = listenLocalEvent('refresh-products', fetchProducts);
+
     return () => {
       supabase.removeChannel(channel);
+      cleanup();
+      cleanupTable();
     };
   }, []);
 
@@ -160,6 +167,9 @@ export default function Products() {
 
       if (error) throw error;
 
+      // Trigger refresh event
+      publishTableRefresh('products');
+      
       toast.success("Product added successfully!");
       setIsDialogOpen(false);
     } catch (error: any) {
@@ -200,6 +210,9 @@ export default function Products() {
 
       if (error) throw error;
 
+      // Trigger refresh event
+      publishTableRefresh('products');
+      
       toast.success("Product updated successfully!");
       setIsDialogOpen(false);
       setEditingProduct(null);
@@ -219,6 +232,9 @@ export default function Products() {
 
       if (error) throw error;
 
+      // Trigger refresh event
+      publishTableRefresh('products');
+      
       toast.success("Product deleted successfully!");
     } catch (error: any) {
       console.error("Error deleting product:", error);
@@ -320,6 +336,9 @@ export default function Products() {
 
       if (error) throw error;
 
+      // Trigger refresh event
+      publishTableRefresh('products');
+      
       toast.success(`Successfully imported ${productsToInsert.length} products!`);
       e.target.value = '';
     } catch (error: any) {

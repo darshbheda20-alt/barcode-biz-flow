@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { QrCode, PackagePlus, Package, AlertTriangle, X, Undo2, Edit3, XCircle }
 import { z } from "zod";
 import { getUserFriendlyError } from "@/lib/errorHandling";
 import BarcodeScanner from "@/components/BarcodeScanner";
+import { listenLocalEvent, publishRefreshAll, publishTableRefresh } from "@/lib/eventBus";
 
 const scanSchema = z.object({
   barcode: z.string().trim().min(1, "Barcode is required").max(100, "Barcode must be less than 100 characters"),
@@ -219,6 +220,10 @@ export default function ScanLog() {
     }
 
     setSessionScans(prev => [...prev, { sku: masterSKU, qty }]);
+    
+    // Trigger refresh for products and scan_logs
+    publishTableRefresh('products');
+    publishTableRefresh('scan_logs');
   };
 
   // Handle confirmation (single match)
