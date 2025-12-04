@@ -34,6 +34,21 @@ export default function Inventory() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const downloadTemplate = () => {
+    const templateData = [
+      {
+        "Master SKU": "EXAMPLE-SKU-001",
+        "Available Units": 0,
+        "Damaged Units": 0
+      }
+    ];
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Inventory Template");
+    XLSX.writeFile(wb, "inventory_import_template.xlsx");
+    toast.success("Template downloaded");
+  };
+
   const exportToExcel = () => {
     const exportData = products.map(p => ({
       "Product Name": p.name,
@@ -165,6 +180,10 @@ export default function Inventory() {
             accept=".xlsx,.xls,.csv"
             className="hidden"
           />
+          <Button variant="ghost" size="sm" onClick={downloadTemplate}>
+            <Download className="h-4 w-4 mr-1" />
+            Template
+          </Button>
           <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
             <Upload className="h-4 w-4 mr-1" />
             Import
