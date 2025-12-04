@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, Download } from "lucide-react";
-import { cropFlipkartPdf } from "@/lib/pdfCropper";
+import { Loader2, Download, FileText, Printer } from "lucide-react";
+import { cropFlipkartPdf, combineLabels, combineInvoices } from "@/lib/pdfCropper";
 import { DebugDownloader } from "./DebugDownloader";
 import { listenLocalEvent, publishRefreshAll } from "@/lib/eventBus";
 
@@ -107,45 +107,69 @@ export function CropAndPrintQueue() {
       // Crop the PDF
       const cropResults = await cropFlipkartPdf(pdfBytes);
 
-      // Upload cropped PDFs and update order_packing records
+      // Generate file names
+      const baseName = item.source_file_path.split('/').pop()?.replace('.pdf', '') || 'crop';
+      const timestamp = Date.now();
+      
+      // Create combined PDFs
+      const combinedLabels = await combineLabels(cropResults);
+      const combinedInvoices = await combineInvoices(cropResults);
+      
+      // Upload combined labels PDF
+      const labelsFileName = `${baseName}_labels_${timestamp}.pdf`;
+      const { error: labelsUploadError } = await supabase.storage
+        .from('printed-labels')
+        .upload(labelsFileName, combinedLabels, {
+          contentType: 'application/pdf',
+          upsert: true
+        });
+
+      if (labelsUploadError) throw labelsUploadError;
+
+      // Upload combined invoices PDF
+      const invoicesFileName = `${baseName}_invoices_${timestamp}.pdf`;
+      const { error: invoicesUploadError } = await supabase.storage
+        .from('printed-invoices')
+        .upload(invoicesFileName, combinedInvoices, {
+          contentType: 'application/pdf',
+          upsert: true
+        });
+
+      if (invoicesUploadError) throw invoicesUploadError;
+
+      // Also upload individual page PDFs and update order_packing records
       const cropMetadata = [];
 
       for (let i = 0; i < cropResults.length; i++) {
-        const { labelPdf, invoicePdf } = cropResults[i];
+        const { labelPdf, invoicePdf, pageNumber } = cropResults[i];
         
-        // Generate file names
-        const baseName = item.source_file_path.split('/').pop()?.replace('.pdf', '') || 'crop';
-        const labelName = `${baseName}_page${i + 1}_label.pdf`;
-        const invoiceName = `${baseName}_page${i + 1}_invoice.pdf`;
+        const labelName = `${baseName}_page${pageNumber}_label.pdf`;
+        const invoiceName = `${baseName}_page${pageNumber}_invoice.pdf`;
 
-        // Upload label
-        const { error: labelUploadError } = await supabase.storage
+        // Upload individual label
+        await supabase.storage
           .from('printed-labels')
           .upload(labelName, labelPdf, {
             contentType: 'application/pdf',
             upsert: true
           });
 
-        if (labelUploadError) throw labelUploadError;
-
-        // Upload invoice
-        const { error: invoiceUploadError } = await supabase.storage
+        // Upload individual invoice
+        await supabase.storage
           .from('printed-invoices')
           .upload(invoiceName, invoicePdf, {
             contentType: 'application/pdf',
             upsert: true
           });
 
-        if (invoiceUploadError) throw invoiceUploadError;
-
         cropMetadata.push({
-          page_number: i + 1,
+          page_number: pageNumber,
           label_path: `printed-labels/${labelName}`,
           invoice_path: `printed-invoices/${invoiceName}`,
           crop_type: 'flipkart_split'
         });
 
-        // Update first order_packing record for this page if exists
+        // Update order_packing record for this page if exists
         if (item.order_packing_ids && item.order_packing_ids[i]) {
           await supabase
             .from('order_packing')
@@ -156,13 +180,21 @@ export function CropAndPrintQueue() {
             .eq('id', item.order_packing_ids[i]);
         }
       }
+      
+      // Add combined file paths to metadata
+      const finalMetadata = {
+        pages: cropMetadata,
+        combined_labels_path: `printed-labels/${labelsFileName}`,
+        combined_invoices_path: `printed-invoices/${invoicesFileName}`,
+        total_pages: cropResults.length
+      };
 
       // Mark as completed
       await supabase
         .from('crop_queue')
         .update({
           status: 'completed',
-          crop_metadata: cropMetadata,
+          crop_metadata: finalMetadata,
           completed_at: new Date().toISOString()
         })
         .eq('id', item.id);
@@ -195,8 +227,10 @@ export function CropAndPrintQueue() {
     }
   };
 
-  const downloadCroppedPdfs = async (item: CropQueueItem) => {
-    if (!item.crop_metadata || !Array.isArray(item.crop_metadata)) {
+  const downloadCroppedPdfs = async (item: CropQueueItem, type: 'labels' | 'invoices' | 'both') => {
+    const metadata = item.crop_metadata as any;
+    
+    if (!metadata) {
       toast({
         title: "No cropped files",
         description: "This item hasn't been processed yet",
@@ -206,45 +240,43 @@ export function CropAndPrintQueue() {
     }
 
     try {
-      for (const meta of item.crop_metadata) {
-        // Download label PDF
-        if (meta.label_path) {
-          const labelPath = meta.label_path.replace(/^printed-labels\//, '');
-          const { data: labelData, error: labelError } = await supabase.storage
-            .from('printed-labels')
-            .download(labelPath);
-          
-          if (!labelError && labelData) {
-            const url = URL.createObjectURL(labelData);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = labelPath;
-            a.click();
-            URL.revokeObjectURL(url);
-          }
+      // Download combined labels PDF
+      if ((type === 'labels' || type === 'both') && metadata.combined_labels_path) {
+        const labelsPath = metadata.combined_labels_path.replace(/^printed-labels\//, '');
+        const { data: labelsData, error: labelsError } = await supabase.storage
+          .from('printed-labels')
+          .download(labelsPath);
+        
+        if (!labelsError && labelsData) {
+          const url = URL.createObjectURL(labelsData);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = labelsPath;
+          a.click();
+          URL.revokeObjectURL(url);
         }
+      }
 
-        // Download invoice PDF
-        if (meta.invoice_path) {
-          const invoicePath = meta.invoice_path.replace(/^printed-invoices\//, '');
-          const { data: invoiceData, error: invoiceError } = await supabase.storage
-            .from('printed-invoices')
-            .download(invoicePath);
-          
-          if (!invoiceError && invoiceData) {
-            const url = URL.createObjectURL(invoiceData);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = invoicePath;
-            a.click();
-            URL.revokeObjectURL(url);
-          }
+      // Download combined invoices PDF
+      if ((type === 'invoices' || type === 'both') && metadata.combined_invoices_path) {
+        const invoicesPath = metadata.combined_invoices_path.replace(/^printed-invoices\//, '');
+        const { data: invoicesData, error: invoicesError } = await supabase.storage
+          .from('printed-invoices')
+          .download(invoicesPath);
+        
+        if (!invoicesError && invoicesData) {
+          const url = URL.createObjectURL(invoicesData);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = invoicesPath;
+          a.click();
+          URL.revokeObjectURL(url);
         }
       }
 
       toast({
         title: "Success",
-        description: "PDFs downloaded successfully",
+        description: `${type === 'both' ? 'PDFs' : type.charAt(0).toUpperCase() + type.slice(1)} downloaded successfully`,
       });
     } catch (error) {
       console.error('Error downloading PDFs:', error);
@@ -306,14 +338,26 @@ export function CropAndPrintQueue() {
                 <div className="flex items-center gap-2">
                   {getStatusBadge(item.status)}
                   {item.status === 'completed' && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => downloadCroppedPdfs(item)}
-                    >
-                      <Download className="h-4 w-4 mr-1" />
-                      PDFs
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => downloadCroppedPdfs(item, 'labels')}
+                        title="Download Labels PDF"
+                      >
+                        <Printer className="h-4 w-4 mr-1" />
+                        Labels
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => downloadCroppedPdfs(item, 'invoices')}
+                        title="Download Invoices PDF"
+                      >
+                        <FileText className="h-4 w-4 mr-1" />
+                        Invoices
+                      </Button>
+                    </>
                   )}
                   {item.status === 'queued' && (
                     <Button
