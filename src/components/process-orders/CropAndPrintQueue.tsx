@@ -195,25 +195,65 @@ export function CropAndPrintQueue() {
     }
   };
 
-  const downloadDebugJson = (item: CropQueueItem) => {
-    const debugData = {
-      id: item.id,
-      source_file_path: item.source_file_path,
-      platform: item.platform,
-      status: item.status,
-      order_packing_ids: item.order_packing_ids,
-      crop_metadata: item.crop_metadata,
-      error_message: item.error_message,
-      created_at: item.created_at
-    };
+  const downloadCroppedPdfs = async (item: CropQueueItem) => {
+    if (!item.crop_metadata || !Array.isArray(item.crop_metadata)) {
+      toast({
+        title: "No cropped files",
+        description: "This item hasn't been processed yet",
+        variant: "destructive"
+      });
+      return;
+    }
 
-    const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `crop_debug_${item.id}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      for (const meta of item.crop_metadata) {
+        // Download label PDF
+        if (meta.label_path) {
+          const labelPath = meta.label_path.replace(/^printed-labels\//, '');
+          const { data: labelData, error: labelError } = await supabase.storage
+            .from('printed-labels')
+            .download(labelPath);
+          
+          if (!labelError && labelData) {
+            const url = URL.createObjectURL(labelData);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = labelPath;
+            a.click();
+            URL.revokeObjectURL(url);
+          }
+        }
+
+        // Download invoice PDF
+        if (meta.invoice_path) {
+          const invoicePath = meta.invoice_path.replace(/^printed-invoices\//, '');
+          const { data: invoiceData, error: invoiceError } = await supabase.storage
+            .from('printed-invoices')
+            .download(invoicePath);
+          
+          if (!invoiceError && invoiceData) {
+            const url = URL.createObjectURL(invoiceData);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = invoicePath;
+            a.click();
+            URL.revokeObjectURL(url);
+          }
+        }
+      }
+
+      toast({
+        title: "Success",
+        description: "PDFs downloaded successfully",
+      });
+    } catch (error) {
+      console.error('Error downloading PDFs:', error);
+      toast({
+        title: "Error",
+        description: "Failed to download PDFs",
+        variant: "destructive"
+      });
+    }
   };
 
   if (loading) {
@@ -265,13 +305,16 @@ export function CropAndPrintQueue() {
                 </div>
                 <div className="flex items-center gap-2">
                   {getStatusBadge(item.status)}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => downloadDebugJson(item)}
-                  >
-                    <Download className="h-4 w-4" />
-                  </Button>
+                  {item.status === 'completed' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => downloadCroppedPdfs(item)}
+                    >
+                      <Download className="h-4 w-4 mr-1" />
+                      PDFs
+                    </Button>
+                  )}
                   {item.status === 'queued' && (
                     <Button
                       size="sm"
