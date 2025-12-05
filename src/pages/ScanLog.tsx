@@ -202,7 +202,7 @@ export default function ScanLog() {
     setScannedBarcode(trimmedBarcode);
 
     // Check for active auto-map first
-    if (activeAutoMap && barcode === activeAutoMap.barcode) {
+    if (activeAutoMap && trimmedBarcode === activeAutoMap.barcode) {
       if (activeAutoMap.remaining_auto_scans > 0) {
         // Auto-add without modal
         await addStock(activeAutoMap.master_sku, 1);
@@ -216,7 +216,7 @@ export default function ScanLog() {
       } else {
         // Remaining is 0, re-prompt
         setActiveAutoMap(null);
-        const products = await resolveBarcodeToProducts(barcode);
+        const products = await resolveBarcodeToProducts(trimmedBarcode);
         if (products.length > 0) {
           setCandidateProducts(products);
           setShowSKUSelector(true);
@@ -226,13 +226,13 @@ export default function ScanLog() {
     }
 
     // Different barcode clears auto-map
-    if (activeAutoMap && barcode !== activeAutoMap.barcode) {
+    if (activeAutoMap && trimmedBarcode !== activeAutoMap.barcode) {
       setActiveAutoMap(null);
       toast.info("Auto-add ended - different barcode");
     }
 
     // In session mode, auto-add if same barcode
-    if (sessionMode && barcode === lastBarcode) {
+    if (sessionMode && trimmedBarcode === lastBarcode) {
       await addStock(lastSelectedMasterSKU, 1);
       setConsecutiveCount(prev => prev + 1);
       toast.success(`Auto-added +1 (${consecutiveCount + 1})`);
@@ -240,13 +240,13 @@ export default function ScanLog() {
     }
 
     // Different barcode breaks session mode
-    if (sessionMode && barcode !== lastBarcode) {
+    if (sessionMode && trimmedBarcode !== lastBarcode) {
       setSessionMode(false);
       setConsecutiveCount(0);
       toast.info("Session mode ended - different barcode");
     }
 
-    const products = await resolveBarcodeToProducts(barcode);
+    const products = await resolveBarcodeToProducts(trimmedBarcode);
 
     if (products.length === 0) {
       // No match - show unmapped modal
