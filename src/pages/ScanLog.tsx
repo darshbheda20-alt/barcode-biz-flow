@@ -270,7 +270,7 @@ export default function ScanLog() {
     setPickScannedBarcode(trimmedBarcode);
 
     // Check for active auto-map first
-    if (pickActiveAutoMap && barcode === pickActiveAutoMap.barcode) {
+    if (pickActiveAutoMap && trimmedBarcode === pickActiveAutoMap.barcode) {
       if (pickActiveAutoMap.remaining_auto_scans > 0) {
         // Check stock before auto-pick
         const { data: product } = await supabase
@@ -297,7 +297,7 @@ export default function ScanLog() {
       } else {
         // Remaining is 0, re-prompt
         setPickActiveAutoMap(null);
-        const products = await resolveBarcodeToProducts(barcode);
+        const products = await resolveBarcodeToProducts(trimmedBarcode);
         if (products.length > 0) {
           setPickCandidateProducts(products);
           setShowPickSKUSelector(true);
@@ -307,12 +307,12 @@ export default function ScanLog() {
     }
 
     // Different barcode clears auto-map
-    if (pickActiveAutoMap && barcode !== pickActiveAutoMap.barcode) {
+    if (pickActiveAutoMap && trimmedBarcode !== pickActiveAutoMap.barcode) {
       setPickActiveAutoMap(null);
       toast.info("Auto-pick ended - different barcode");
     }
 
-    const products = await resolveBarcodeToProducts(barcode);
+    const products = await resolveBarcodeToProducts(trimmedBarcode);
 
     if (products.length === 0) {
       // No match - show unmapped modal
