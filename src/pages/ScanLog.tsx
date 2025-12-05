@@ -136,38 +136,70 @@ export default function ScanLog() {
 
   // Resolve barcode to product(s)
   const resolveBarcodeToProducts = async (barcode: string): Promise<Product[]> => {
+    const trimmedBarcode = barcode.trim();
+    console.log('[ScanLog] Resolving barcode:', trimmedBarcode);
+
     // Check sku_aliases
-    const { data: aliases } = await supabase
+    const { data: aliases, error: aliasError } = await supabase
       .from("sku_aliases")
       .select("product_id")
       .eq("alias_type", "barcode")
-      .eq("alias_value", barcode);
+      .eq("alias_value", trimmedBarcode);
+
+    if (aliasError) {
+      console.error('[ScanLog] Error fetching sku_aliases:', aliasError);
+      toast.error('Failed to check barcode aliases');
+    }
+
+    console.log('[ScanLog] Aliases found:', aliases?.length || 0, aliases);
 
     // Check products table
-    const { data: directProducts } = await supabase
+    const { data: directProducts, error: productError } = await supabase
       .from("products")
       .select("id, name, master_sku, color, brand_size, standard_size, available_units")
-      .eq("barcode", barcode);
+      .eq("barcode", trimmedBarcode);
 
+    if (productError) {
+      console.error('[ScanLog] Error fetching products by barcode:', productError);
+      toast.error('Failed to search products by barcode');
+    }
+
+    console.log('[ScanLog] Direct products found:', directProducts?.length || 0, directProducts);
+
+    // Collect unique product IDs from both sources
     const productIds = new Set<string>();
     aliases?.forEach(a => productIds.add(a.product_id));
     directProducts?.forEach(p => productIds.add(p.id));
 
-    if (productIds.size === 0) return [];
+    console.log('[ScanLog] Unique product IDs to fetch:', Array.from(productIds));
 
-    const { data: products } = await supabase
+    if (productIds.size === 0) {
+      console.log('[ScanLog] No products found for barcode:', trimmedBarcode);
+      return [];
+    }
+
+    // Fetch full product details
+    const { data: products, error: finalError } = await supabase
       .from("products")
       .select("id, name, master_sku, color, brand_size, standard_size, available_units")
       .in("id", Array.from(productIds));
 
+    if (finalError) {
+      console.error('[ScanLog] Error fetching product details:', finalError);
+      toast.error('Failed to fetch product details');
+      return [];
+    }
+
+    console.log('[ScanLog] Final products resolved:', products?.length || 0, products);
     return products || [];
   };
 
   // Handle barcode scan for Receive
   const handleBarcodeScan = async (barcode: string) => {
-    if (isDuplicateScan(barcode)) return;
+    const trimmedBarcode = barcode.trim();
+    if (isDuplicateScan(trimmedBarcode)) return;
 
-    setScannedBarcode(barcode);
+    setScannedBarcode(trimmedBarcode);
 
     // Check for active auto-map first
     if (activeAutoMap && barcode === activeAutoMap.barcode) {
@@ -232,9 +264,10 @@ export default function ScanLog() {
 
   // ===== PICK BARCODE SCAN HANDLER =====
   const handlePickBarcodeScan = async (barcode: string) => {
-    if (isPickDuplicateScan(barcode)) return;
+    const trimmedBarcode = barcode.trim();
+    if (isPickDuplicateScan(trimmedBarcode)) return;
 
-    setPickScannedBarcode(barcode);
+    setPickScannedBarcode(trimmedBarcode);
 
     // Check for active auto-map first
     if (pickActiveAutoMap && barcode === pickActiveAutoMap.barcode) {
