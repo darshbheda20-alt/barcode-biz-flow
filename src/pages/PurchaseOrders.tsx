@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ClipboardList, AlertCircle, ShoppingCart, Package, Check, List, LayoutGrid } from "lucide-react";
+import { ClipboardList, AlertCircle, ShoppingCart, Package, Check, List, LayoutGrid, History } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { ReorderGroupedView, OrderedGroupedView } from "@/components/purchase-orders/PurchaseOrderGroupedView";
@@ -40,11 +40,13 @@ interface PurchaseOrder {
 export default function PurchaseOrders() {
   const [lowStockProducts, setLowStockProducts] = useState<LowStockProduct[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [completedOrders, setCompletedOrders] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [orderQuantities, setOrderQuantities] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [reorderViewMode, setReorderViewMode] = useState<"list" | "grouped">("list");
   const [orderedViewMode, setOrderedViewMode] = useState<"list" | "grouped">("list");
+  const [historyViewMode, setHistoryViewMode] = useState<"list" | "grouped">("list");
 
   useEffect(() => {
     fetchData();
@@ -75,17 +77,23 @@ export default function PurchaseOrders() {
 
   const fetchData = async () => {
     try {
-      const [productsRes, ordersRes] = await Promise.all([
+      const [productsRes, ordersRes, completedRes] = await Promise.all([
         supabase.from("products").select("*").order("name"),
         supabase
           .from("purchase_orders")
           .select("*, products(*)")
           .in("status", ["ordered", "partially_received"])
           .order("ordered_at", { ascending: false }),
+        supabase
+          .from("purchase_orders")
+          .select("*, products(*)")
+          .eq("status", "received")
+          .order("received_at", { ascending: false }),
       ]);
 
       if (productsRes.error) throw productsRes.error;
       if (ordersRes.error) throw ordersRes.error;
+      if (completedRes.error) throw completedRes.error;
 
       const lowStock = (productsRes.data || []).filter(
         (product) => product.available_units < product.reorder_level
@@ -101,6 +109,7 @@ export default function PurchaseOrders() {
 
       setLowStockProducts(filteredLowStock);
       setPurchaseOrders(ordersRes.data || []);
+      setCompletedOrders(completedRes.data || []);
 
       // Initialize order quantities
       const quantities: Record<string, number> = {};
@@ -226,6 +235,15 @@ export default function PurchaseOrders() {
             {pendingOrders > 0 && (
               <Badge variant="secondary" className="ml-1">
                 {pendingOrders}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="history" className="gap-2">
+            <History className="h-4 w-4" />
+            History
+            {completedOrders.length > 0 && (
+              <Badge variant="secondary" className="ml-1">
+                {completedOrders.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -529,6 +547,138 @@ export default function PurchaseOrders() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="history" className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Completed Orders</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{completedOrders.length}</div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Total Units Received</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {completedOrders.reduce((sum, o) => sum + o.quantity_received, 0)}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Order History</CardTitle>
+                <CardDescription>
+                  Previously completed purchase orders
+                </CardDescription>
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  variant={historyViewMode === "list" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setHistoryViewMode("list")}
+                >
+                  <List className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant={historyViewMode === "grouped" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setHistoryViewMode("grouped")}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-center py-8 text-muted-foreground">Loading history...</div>
+              ) : completedOrders.length === 0 ? (
+                <div className="text-center py-8">
+                  <History className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
+                  <p className="text-muted-foreground">No completed orders yet</p>
+                </div>
+              ) : historyViewMode === "grouped" ? (
+                <OrderedGroupedView
+                  orders={completedOrders}
+                  onMarkAsReceived={() => {}}
+                  submitting={null}
+                  isHistory
+                />
+              ) : (
+                <div className="space-y-3">
+                  {completedOrders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="p-4 rounded-lg border border-green-500/30 bg-green-500/5 hover:bg-green-500/10 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Check className="h-5 w-5 text-green-600 shrink-0" />
+                            <h3 className="font-semibold truncate">{order.products.name}</h3>
+                            <Badge variant="outline" className="bg-green-500/20 text-green-600 border-green-500/30">
+                              Completed
+                            </Badge>
+                          </div>
+
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">SKU:</span>{" "}
+                              <span className="font-medium">{order.products.master_sku}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Vendor:</span>{" "}
+                              <span className="font-medium">{order.products.vendor_name}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Ordered:</span>{" "}
+                              <span className="font-medium">
+                                {format(new Date(order.ordered_at), "dd MMM yyyy")}
+                              </span>
+                            </div>
+                            {order.received_at && (
+                              <div>
+                                <span className="text-muted-foreground">Received:</span>{" "}
+                                <span className="font-medium">
+                                  {format(new Date(order.received_at), "dd MMM yyyy")}
+                                </span>
+                              </div>
+                            )}
+                            {order.products.color && (
+                              <div>
+                                <span className="text-muted-foreground">Color:</span>{" "}
+                                <span className="font-medium">{order.products.color}</span>
+                              </div>
+                            )}
+                            {order.products.standard_size && (
+                              <div>
+                                <span className="text-muted-foreground">Size:</span>{" "}
+                                <span className="font-medium">{order.products.standard_size}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2 shrink-0">
+                          <Badge variant="outline" className="bg-green-500/20 text-green-600 border-green-500/30">
+                            Received: {order.quantity_received}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </CardContent>
