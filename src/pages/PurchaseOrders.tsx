@@ -5,9 +5,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ClipboardList, AlertCircle, ShoppingCart, Package, Check } from "lucide-react";
+import { ClipboardList, AlertCircle, ShoppingCart, Package, Check, List, LayoutGrid } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { ReorderGroupedView, OrderedGroupedView } from "@/components/purchase-orders/PurchaseOrderGroupedView";
 
 interface LowStockProduct {
   id: string;
@@ -42,6 +43,8 @@ export default function PurchaseOrders() {
   const [loading, setLoading] = useState(true);
   const [orderQuantities, setOrderQuantities] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [reorderViewMode, setReorderViewMode] = useState<"list" | "grouped">("list");
+  const [orderedViewMode, setOrderedViewMode] = useState<"list" | "grouped">("list");
 
   useEffect(() => {
     fetchData();
@@ -259,11 +262,29 @@ export default function PurchaseOrders() {
           </div>
 
           <Card>
-            <CardHeader>
-              <CardTitle>Low Stock Products</CardTitle>
-              <CardDescription>
-                Products below reorder level requiring restocking
-              </CardDescription>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Low Stock Products</CardTitle>
+                <CardDescription>
+                  Products below reorder level requiring restocking
+                </CardDescription>
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  variant={reorderViewMode === "list" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setReorderViewMode("list")}
+                >
+                  <List className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant={reorderViewMode === "grouped" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setReorderViewMode("grouped")}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -273,6 +294,16 @@ export default function PurchaseOrders() {
                   <ClipboardList className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
                   <p className="text-muted-foreground">All products are well stocked or already ordered!</p>
                 </div>
+              ) : reorderViewMode === "grouped" ? (
+                <ReorderGroupedView
+                  products={lowStockProducts}
+                  orderQuantities={orderQuantities}
+                  onQuantityChange={(id, qty) =>
+                    setOrderQuantities((prev) => ({ ...prev, [id]: qty }))
+                  }
+                  onMarkAsOrdered={handleMarkAsOrdered}
+                  submitting={submitting}
+                />
               ) : (
                 <div className="space-y-3">
                   {lowStockProducts.map((product) => {
@@ -383,11 +414,29 @@ export default function PurchaseOrders() {
           </div>
 
           <Card>
-            <CardHeader>
-              <CardTitle>Ordered Products</CardTitle>
-              <CardDescription>
-                Track orders and mark items as received when they arrive
-              </CardDescription>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Ordered Products</CardTitle>
+                <CardDescription>
+                  Track orders and mark items as received when they arrive
+                </CardDescription>
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  variant={orderedViewMode === "list" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setOrderedViewMode("list")}
+                >
+                  <List className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant={orderedViewMode === "grouped" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setOrderedViewMode("grouped")}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -397,6 +446,12 @@ export default function PurchaseOrders() {
                   <Package className="mx-auto h-12 w-12 text-muted-foreground mb-2" />
                   <p className="text-muted-foreground">No pending orders</p>
                 </div>
+              ) : orderedViewMode === "grouped" ? (
+                <OrderedGroupedView
+                  orders={purchaseOrders}
+                  onMarkAsReceived={handleMarkAsReceived}
+                  submitting={submitting}
+                />
               ) : (
                 <div className="space-y-3">
                   {purchaseOrders.map((order) => {
