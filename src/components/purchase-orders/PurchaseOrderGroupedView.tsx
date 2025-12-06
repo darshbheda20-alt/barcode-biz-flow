@@ -52,6 +52,7 @@ interface OrderedGroupedViewProps {
   orders: PurchaseOrder[];
   onMarkAsReceived: (order: PurchaseOrder) => void;
   submitting: string | null;
+  isHistory?: boolean;
 }
 
 export function ReorderGroupedView({
@@ -232,6 +233,7 @@ export function OrderedGroupedView({
   orders,
   onMarkAsReceived,
   submitting,
+  isHistory = false,
 }: OrderedGroupedViewProps) {
   const [expandedNames, setExpandedNames] = useState<Set<string>>(new Set());
   const [expandedColors, setExpandedColors] = useState<Set<string>>(new Set());
@@ -278,30 +280,34 @@ export function OrderedGroupedView({
         const isNameExpanded = expandedNames.has(name);
         const colors = groupedOrders[name];
         const totalOrders = Object.values(colors).reduce((sum, items) => sum + items.length, 0);
-        const totalUnitsOrdered = Object.values(colors)
-          .flat()
-          .reduce((sum, o) => sum + (o.quantity_ordered - o.quantity_received), 0);
+        const totalUnitsOrdered = isHistory
+          ? Object.values(colors).flat().reduce((sum, o) => sum + o.quantity_received, 0)
+          : Object.values(colors).flat().reduce((sum, o) => sum + (o.quantity_ordered - o.quantity_received), 0);
 
         return (
-          <div key={name} className="border border-primary/30 rounded-lg overflow-hidden bg-primary/5">
+          <div key={name} className={`border rounded-lg overflow-hidden ${isHistory ? 'border-green-500/30 bg-green-500/5' : 'border-primary/30 bg-primary/5'}`}>
             <button
               onClick={() => toggleName(name)}
-              className="w-full flex items-center justify-between p-4 hover:bg-primary/10 transition-colors"
+              className={`w-full flex items-center justify-between p-4 transition-colors ${isHistory ? 'hover:bg-green-500/10' : 'hover:bg-primary/10'}`}
             >
               <div className="flex items-center gap-2">
                 {isNameExpanded ? (
-                  <ChevronDown className="h-5 w-5 text-primary" />
+                  <ChevronDown className={`h-5 w-5 ${isHistory ? 'text-green-600' : 'text-primary'}`} />
                 ) : (
-                  <ChevronRight className="h-5 w-5 text-primary" />
+                  <ChevronRight className={`h-5 w-5 ${isHistory ? 'text-green-600' : 'text-primary'}`} />
                 )}
-                <ShoppingCart className="h-5 w-5 text-primary" />
+                {isHistory ? (
+                  <Check className="h-5 w-5 text-green-600" />
+                ) : (
+                  <ShoppingCart className="h-5 w-5 text-primary" />
+                )}
                 <span className="font-semibold text-lg">{name}</span>
                 <span className="text-sm text-muted-foreground">
                   ({Object.keys(colors).length} colors, {totalOrders} orders)
                 </span>
               </div>
-              <Badge variant="outline" className="bg-primary/20 text-primary border-primary/30">
-                Awaiting: {totalUnitsOrdered} units
+              <Badge variant="outline" className={isHistory ? 'bg-green-500/20 text-green-600 border-green-500/30' : 'bg-primary/20 text-primary border-primary/30'}>
+                {isHistory ? `Received: ${totalUnitsOrdered} units` : `Awaiting: ${totalUnitsOrdered} units`}
               </Badge>
             </button>
 
@@ -311,13 +317,15 @@ export function OrderedGroupedView({
                   const colorKey = getColorKey(name, color);
                   const isColorExpanded = expandedColors.has(colorKey);
                   const items = colors[color];
-                  const colorUnitsOrdered = items.reduce((sum, o) => sum + (o.quantity_ordered - o.quantity_received), 0);
+                  const colorUnitsOrdered = isHistory
+                    ? items.reduce((sum, o) => sum + o.quantity_received, 0)
+                    : items.reduce((sum, o) => sum + (o.quantity_ordered - o.quantity_received), 0);
 
                   return (
-                    <div key={colorKey} className="border-t border-primary/20">
+                    <div key={colorKey} className={`border-t ${isHistory ? 'border-green-500/20' : 'border-primary/20'}`}>
                       <button
                         onClick={() => toggleColor(colorKey)}
-                        className="w-full flex items-center justify-between p-3 pl-12 hover:bg-primary/10 transition-colors"
+                        className={`w-full flex items-center justify-between p-3 pl-12 transition-colors ${isHistory ? 'hover:bg-green-500/10' : 'hover:bg-primary/10'}`}
                       >
                         <div className="flex items-center gap-2">
                           {isColorExpanded ? (
@@ -327,7 +335,7 @@ export function OrderedGroupedView({
                           )}
                           <span className="font-medium">{color}</span>
                           <span className="text-sm text-muted-foreground">
-                            ({items.length} orders, {colorUnitsOrdered} units awaiting)
+                            ({items.length} orders, {colorUnitsOrdered} units {isHistory ? 'received' : 'awaiting'})
                           </span>
                         </div>
                       </button>
@@ -339,7 +347,7 @@ export function OrderedGroupedView({
                             return (
                               <div
                                 key={order.id}
-                                className="flex items-center justify-between p-3 pl-20 border-t border-primary/10 hover:bg-primary/5 transition-colors"
+                                className={`flex items-center justify-between p-3 pl-20 border-t transition-colors ${isHistory ? 'border-green-500/10 hover:bg-green-500/5' : 'border-primary/10 hover:bg-primary/5'}`}
                               >
                                 <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
                                   <div>
@@ -356,32 +364,47 @@ export function OrderedGroupedView({
                                     <span className="text-muted-foreground">Ordered: </span>
                                     <span>{format(new Date(order.ordered_at), "dd MMM")}</span>
                                   </div>
-                                  <div>
-                                    <span className="text-muted-foreground">Vendor: </span>
-                                    <span>{order.products.vendor_name}</span>
-                                  </div>
+                                  {isHistory && order.received_at ? (
+                                    <div>
+                                      <span className="text-muted-foreground">Received: </span>
+                                      <span>{format(new Date(order.received_at), "dd MMM")}</span>
+                                    </div>
+                                  ) : (
+                                    <div>
+                                      <span className="text-muted-foreground">Vendor: </span>
+                                      <span>{order.products.vendor_name}</span>
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-2 ml-4">
-                                  <Badge variant="outline" className="bg-primary/20 text-primary border-primary/30">
-                                    {order.quantity_ordered}
-                                  </Badge>
-                                  {order.quantity_received > 0 && (
+                                  {isHistory ? (
                                     <Badge variant="outline" className="bg-green-500/20 text-green-600 border-green-500/30">
-                                      +{order.quantity_received}
+                                      Received: {order.quantity_received}
                                     </Badge>
+                                  ) : (
+                                    <>
+                                      <Badge variant="outline" className="bg-primary/20 text-primary border-primary/30">
+                                        {order.quantity_ordered}
+                                      </Badge>
+                                      {order.quantity_received > 0 && (
+                                        <Badge variant="outline" className="bg-green-500/20 text-green-600 border-green-500/30">
+                                          +{order.quantity_received}
+                                        </Badge>
+                                      )}
+                                      {order.status === "partially_received" && (
+                                        <Badge variant="outline" className="bg-orange-500/20 text-orange-600 border-orange-500/30">
+                                          Partial
+                                        </Badge>
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        onClick={() => onMarkAsReceived(order)}
+                                        disabled={submitting === order.id}
+                                      >
+                                        <Check className="h-4 w-4" />
+                                      </Button>
+                                    </>
                                   )}
-                                  {order.status === "partially_received" && (
-                                    <Badge variant="outline" className="bg-orange-500/20 text-orange-600 border-orange-500/30">
-                                      Partial
-                                    </Badge>
-                                  )}
-                                  <Button
-                                    size="sm"
-                                    onClick={() => onMarkAsReceived(order)}
-                                    disabled={submitting === order.id}
-                                  >
-                                    <Check className="h-4 w-4" />
-                                  </Button>
                                 </div>
                               </div>
                             );
